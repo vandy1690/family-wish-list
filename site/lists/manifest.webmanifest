@@ -1,0 +1,20 @@
+{
+  "name": "Family Wish List",
+  "short_name": "Wish List",
+  "description": "A family wish list: one list each, from any store, with purchases hidden from the person they are for.",
+  "id": "/lists",
+  "start_url": "/lists",
+  "scope": "/lists",
+  "display": "standalone",
+  "background_color": "#F0EEE9",
+  "theme_color": "#F0EEE9",
+  "icons": [
+    { "src": "/_site/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/_site/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "share_target": {
+    "action": "/lists",
+    "method": "GET",
+    "params": { "title": "st", "text": "sx", "url": "su" }
+  }
+}

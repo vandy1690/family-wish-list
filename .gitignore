@@ -1,0 +1,6 @@
+node_modules/
+.data/
+.test-output/
+.env*
+.vercel/
+.DS_Store

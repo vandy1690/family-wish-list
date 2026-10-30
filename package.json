@@ -1,0 +1,29 @@
+{
+  "name": "family-wish-list",
+  "version": "1.0.0",
+  "private": true,
+  "description": "One wish list for the whole family, from any store, where the person a gift is for never sees what was bought.",
+  "license": "MIT",
+  "author": "Steven Vanden Heuvel (https://stevendesignco.com)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vandy1690/family-wish-list.git"
+  },
+  "type": "module",
+  "scripts": {
+    "dev": "node dev/server.mjs 4380",
+    "test": "node tests/run.mjs",
+    "test:screens": "node tests/run.mjs screens",
+    "docs:screens": "DOCS=1 node tests/run.mjs screens",
+    "check:styles": "node scripts/check-styles.mjs",
+    "trim:sdc": "node scripts/trim-sdc.mjs",
+    "sync": "node scripts/sync.mjs"
+  },
+  "devDependencies": {
+    "axe-core": "4.13.0",
+    "playwright": "1.63.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

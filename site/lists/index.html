@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<link rel="manifest" href="/lists/manifest.webmanifest">
+<!-- The page head. On its own, the app uses SDC lite (the trimmed SDC styles) and Inter.
+     A site build can replace everything between these markers with its own head. -->
+<!--SDC:HEAD-->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<script>
+  // Light unless dark was chosen, set before the page paints.
+  (function () {
+    try {
+      var stored = localStorage.getItem('theme');
+      if (stored === 'dark' || stored === 'light') document.documentElement.setAttribute('data-theme', stored);
+    } catch (e) {}
+  })();
+</script>
+<link rel="icon" type="image/svg+xml" href="/lists/icon.svg">
+<link rel="stylesheet" href="/lists/sdc-lite.css">
+<!--/SDC:HEAD-->
+<title>Wish List</title>
+<meta name="description" content="A family wish list: one list each, from any store, with purchases hidden from the person they are for.">
+<meta name="apple-mobile-web-app-title" content="Wish List">
+<meta name="format-detection" content="telephone=no">
+<link rel="stylesheet" href="/lists/lists.css">
+<script src="/lists/app.js" defer></script>
+</head>
+<body>
+<!-- Its own simple bar instead of a site header and footer, so the family only sees the
+     wish list. The names in [data-site] come from /api/lists/config (People sets them). -->
+<a class="sdc-skip-link" href="#main">Skip to content</a>
+<header class="wl-bar">
+  <a class="wl-bar__name" href="/lists" data-nav data-site="short">Wish List</a>
+  <div class="wl-bar__who" id="who" hidden>
+    <p class="wl-bar__signed">Signed in as <strong id="whoName"></strong></p>
+    <button class="sdc-btn" type="button" id="helpBtn" data-action="tour">How it works</button>
+    <button class="sdc-btn" type="button" data-action="sign-out">Sign out</button>
+  </div>
+</header>
+<nav class="wl-nav" id="mainNav" aria-label="Main" hidden></nav>
+
+<main id="main" tabindex="-1">
+<sdc-section class="wl">
+  <sdc-layout-container>
+    <noscript><p class="sdc-form-summary">This page needs JavaScript turned on.</p></noscript>
+
+    <!-- Signed out: the sign-in box sits top right on a computer, at the top on a phone. -->
+    <section class="wl-welcome" id="signin" aria-labelledby="welcomeH" hidden>
+      <div class="wl-welcome__title">
+        <p class="sdc-eyebrow sdc-eyebrow--mute">Family and friends</p>
+        <h1 class="sdc-display wl-h1" id="welcomeH" data-site="title">Family Wish List</h1>
+      </div>
+      <div class="wl-welcome__signin wl-panel">
+        <h2 class="sdc-subhead">Sign in</h2>
+        <p class="sdc-form-status" id="signinStatus" role="status" aria-live="polite"></p>
+        <form class="wl-form" id="emailForm" novalidate>
+          <div class="sdc-field" id="emailField">
+            <label class="sdc-field__label" for="email">Your email address</label>
+            <input class="sdc-field__input" id="email" name="email" type="email" autocomplete="email" inputmode="email" autocapitalize="none" spellcheck="false" required aria-describedby="email-hint email-err">
+            <p class="sdc-field__hint" id="email-hint">The address <span data-site="admin">the admin</span> has for you. No password needed.</p>
+            <p class="sdc-field__error" id="email-err" hidden></p>
+          </div>
+          <button class="sdc-btn sdc-btn--primary wl-wide" type="submit">Send me a sign-in code</button>
+          <p class="wl-ask"><button class="wl-linkbtn" type="button" data-action="ask-to-join">Not on the list yet? Ask to join</button></p>
+        </form>
+        <form class="wl-form" id="codeForm" novalidate hidden>
+          <p class="wl-sent" id="sentTo"></p>
+          <div class="sdc-field" id="codeField">
+            <label class="sdc-field__label" for="code">Type the six digit code from the email</label>
+            <input class="sdc-field__input wl-code" id="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="7" pattern="[0-9 ]*" aria-describedby="code-hint code-err">
+            <p class="sdc-field__hint" id="code-hint">Or tap the button in the email. Both work for one hour.</p>
+            <p class="sdc-field__error" id="code-err" hidden></p>
+          </div>
+          <button class="sdc-btn sdc-btn--primary wl-wide" type="submit">Sign in</button>
+          <button class="sdc-btn wl-wide" type="button" data-action="new-code">Send a new code</button>
+          <button class="sdc-btn wl-wide" type="button" data-action="change-email">Use a different email</button>
+          <p class="wl-ask"><button class="wl-linkbtn" type="button" data-action="ask-to-join">No email after a few minutes? Ask to join</button></p>
+        </form>
+        <!-- Asking to join: only puts a name on the admin's People page. Nobody can sign in until added. -->
+        <form class="wl-form" id="requestForm" novalidate hidden>
+          <p id="requestIntro">Tell <span data-site="admin">the admin</span> who you are. Only they can add people. Once you are added, come back here and sign in with this email.</p>
+          <div class="sdc-field">
+            <label class="sdc-field__label" for="rq-name">Your name</label>
+            <input class="sdc-field__input" id="rq-name" name="name" type="text" autocomplete="name" maxlength="40" required aria-describedby="rq-name-err">
+            <p class="sdc-field__error" id="rq-name-err" hidden></p>
+          </div>
+          <div class="sdc-field">
+            <label class="sdc-field__label" for="rq-email">Your email</label>
+            <input class="sdc-field__input" id="rq-email" name="email" type="email" autocomplete="email" inputmode="email" autocapitalize="none" spellcheck="false" required aria-describedby="rq-email-err">
+            <p class="sdc-field__error" id="rq-email-err" hidden></p>
+          </div>
+          <div class="sdc-field">
+            <label class="sdc-field__label" for="rq-note">How do you know the family? (optional)</label>
+            <input class="sdc-field__input" id="rq-note" name="note" type="text" maxlength="200" autocomplete="off" aria-describedby="rq-note-hint rq-note-err">
+            <p class="sdc-field__hint" id="rq-note-hint">Like: a cousin, a neighbor, or a friend from school.</p>
+            <p class="sdc-field__error" id="rq-note-err" hidden></p>
+          </div>
+          <!-- Left empty by people; a bot that fills every box gets quietly ignored. -->
+          <div class="sdc-u-sr-only" aria-hidden="true">
+            <label for="rq-website">Leave this empty</label>
+            <input id="rq-website" name="website" type="text" tabindex="-1" autocomplete="off">
+          </div>
+          <button class="sdc-btn sdc-btn--primary wl-wide" type="submit">Send my request</button>
+          <button class="sdc-btn wl-wide" type="button" data-action="back-to-signin">Back to sign in</button>
+        </form>
+        <p class="wl-fine">You stay signed in on this device for a year.</p>
+      </div>
+      <ol class="wl-steps wl-welcome__steps">
+        <li><strong class="sdc-subhead">Sign in with your email.</strong> We send you a code. There is no password to remember.</li>
+        <li><strong class="sdc-subhead">Make your list.</strong> Add things from any store, or write in something homemade.</li>
+        <li><strong class="sdc-subhead">Shop for others.</strong> Tell everyone what you bought. The person it is for never sees it.</li>
+      </ol>
+    </section>
+
+    <!-- Signed in: drawn by app.js -->
+    <div class="wl-view" id="view" hidden></div>
+  </sdc-layout-container>
+</sdc-section>
+</main>
+
+<footer class="wl-foot">
+  <p>Questions, or trouble signing in? <a class="wl-foot__mail" id="mailAdmin" href="#" hidden><span>Email <span data-site="admin">the admin</span></span></a></p>
+</footer>
+<!-- Messages: fixed to the bottom of the screen so they are seen wherever the person tapped. -->
+<!-- Screen readers hear messages from #status; the bar below is what eyes see. Two pieces so
+     the bar can be fully hidden when empty without the announcements going quiet. -->
+<p class="sdc-u-sr-only" id="status" role="status" aria-live="polite"></p>
+<div class="wl-toast" id="toast" hidden>
+  <p class="wl-toast__text" id="toastText"></p>
+  <button class="sdc-btn wl-toast__ok" type="button" data-action="toast-close">OK</button>
+</div>
+</body>
+</html>
