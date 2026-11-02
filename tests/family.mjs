@@ -227,6 +227,33 @@ const h1 = (p, name) => p.getByRole('heading', { level: 1, name }).waitFor();
   step('A store that refuses the lookup still gets its name filled in, from the link alone');
 }
 
+// ------------------------------------------------------------ how many, and notes, on each gift
+{
+  const a = await pageFor(U.Jane, { width: 390, height: 800 });
+  await a.goto(BASE + '/lists', { waitUntil: 'networkidle' });
+  await a.getByRole('button', { name: 'Add an item' }).click();
+  assert.ok(await a.getByLabel('How many').isVisible() && await a.getByLabel('Notes (optional)').isVisible(),
+    'How many and Notes are in view, nothing to open first');
+  await a.getByLabel('What is it?').fill('Wool socks');
+  await a.getByLabel('How many').selectOption('3');
+  await a.getByLabel('Notes (optional)').fill('Size L, any color but pink.\nThe thick hiking kind.');
+  await a.getByRole('button', { name: 'Add to the list' }).click();
+  await toast(a, 'Added to your list.');
+  const mine = a.locator('.wl-card', { hasText: 'Wool socks' });
+  assert.ok((await mine.innerText()).includes('Wants 3') && (await mine.locator('.wl-card__note').innerText()).startsWith('Size L, any color but pink.'),
+    'the card shows how many and the start of the note');
+
+  const j = await pageFor(john);
+  await j.goto(BASE + `/lists?list=${id.Jane}`, { waitUntil: 'networkidle' });
+  const theirs = j.locator('.wl-card', { hasText: 'Wool socks' });
+  assert.ok((await theirs.locator('.wl-card__note').innerText()).includes('any color but pink'), 'shoppers see the note on the card');
+  await theirs.locator('.wl-card__link').click();
+  await j.getByRole('heading', { level: 2, name: 'Notes' }).waitFor();
+  assert.equal(await j.locator('.wl-detail__note').innerText(), 'Size L, any color but pink.\nThe thick hiking kind.');
+  assert.ok((await j.locator('.wl-detail__body').innerText()).includes('Wants 3. 3 still needed.'));
+  step('Jane adds 3 wool socks with a note, both in view on the form; the card and the item page show them to John');
+}
+
 // ------------------------------------------------------------ the names of this wish list
 {
   const s = await pageFor(john);
