@@ -899,6 +899,7 @@
         it.store ? el('p', { class: 'wl-card__store' }, storeName(it.store)) : null,
         el('h2', { class: 'sdc-subhead wl-card__title' }, el('a', { class: 'wl-card__link', href: urlFor({ item: it.id }), 'data-nav': true }, it.title)),
         meta.length ? el('p', { class: 'wl-card__meta' }, meta) : null,
+        it.note ? el('p', { class: 'wl-card__note' }, it.note) : null,
         tags.length ? el('p', { class: 'wl-tags' }, tags) : null));
   }
 
@@ -926,7 +927,11 @@
       pageH(it.title));
     if (it.priceCents !== null && it.priceCents !== undefined) body.append(el('p', { class: 'wl-detail__price' }, money(it.priceCents)));
     if (it.qty > 1) body.append(el('p', null, shopper ? `Wants ${it.qty}. ${it.need} still needed.` : `You want ${it.qty}.`));
-    if (it.note) body.append(el('p', { class: 'wl-detail__note' }, it.note));
+    if (it.note) {
+      body.append(el('section', { class: 'wl-detail__notes', 'aria-labelledby': 'notesH' },
+        el('h2', { class: 'sdc-subhead', id: 'notesH' }, 'Notes'),
+        el('p', { class: 'wl-detail__note' }, it.note)));
+    }
     const tags = statusTags(it, owner, true);
     if (tags.length) body.append(el('p', { class: 'wl-detail__tags' }, tags));
     if (shopper) {
@@ -1091,7 +1096,7 @@
     const isAdd = f.kind === 'add';
     const heading = isAdd ? (keeps(owner.rel) ? `Add to ${owner.rel === 'own' ? 'my list' : possessive(owner.name) + ' list'}` : `Secret idea for ${owner.name}`) : `Edit ${v.title || 'this'}`;
     const src = imgSrc(v.image);
-    const more = Boolean(v.note || src || (v.qty && v.qty !== '1') || f.moreOpen);
+    const more = Boolean(src || f.moreOpen);
 
     return el('form', { class: 'wl-form', novalidate: true, onsubmit: submitItem },
       // Editing is its own screen, so its heading is the page heading.
@@ -1110,19 +1115,19 @@
         oninput: set('url'),
         onchange: () => { if (/^\S+\.\S+/.test((v.url || '').trim()) && v.url.trim() !== f.looked) lookup(true); },
         addon: btn('Get details from the link', () => lookup(false), false, { id: 'f-lookup' }) }),
+      // How many and notes are always in view: they are what shoppers most need to know.
       el('div', { class: 'wl-fields' },
         field({ id: 'f-price', label: 'Price (optional)', value: v.price,
-          attrs: { inputmode: 'decimal', autocomplete: 'off', maxlength: 12 }, oninput: set('price') })),
+          attrs: { inputmode: 'decimal', autocomplete: 'off', maxlength: 12 }, oninput: set('price') }),
+        selectField({ id: 'f-qty', label: 'How many', value: v.qty || '1',
+          options: Array.from({ length: 10 }, (_, i) => ({ value: String(i + 1), label: String(i + 1) })), onchange: set('qty') })),
+      field({ id: 'f-note', label: 'Notes (optional)', multiline: true, rows: 3, value: v.note,
+        attrs: { maxlength: 400 }, hint: 'Size, color, or anything that helps, like: Size L, any color but pink.', oninput: set('note') }),
       el('details', { class: 'wl-more', open: more, ontoggle: e => { f.moreOpen = e.target.open; } },
-        el('summary', null, 'More details: how many, notes, photo'),
+        el('summary', null, src ? 'Photo' : 'Add a photo (optional)'),
         el('div', { class: 'wl-form' },
-          el('div', { class: 'wl-fields' },
-            selectField({ id: 'f-qty', label: 'How many', value: v.qty || '1',
-              options: Array.from({ length: 10 }, (_, i) => ({ value: String(i + 1), label: String(i + 1) })), onchange: set('qty') })),
-          field({ id: 'f-note', label: 'Notes (optional)', multiline: true, rows: 3, value: v.note,
-            attrs: { maxlength: 400 }, hint: 'Size, color, or anything that helps.', oninput: set('note') }),
           el('div', { class: 'sdc-field' },
-            el('span', { class: 'sdc-field__label', id: 'f-photo-label' }, 'Photo (optional)'),
+            el('span', { class: 'sdc-field__label', id: 'f-photo-label' }, 'Photo'),
             el('div', { class: 'wl-photo' },
               el('div', { class: 'wl-photo__frame' }, src
                 ? el('img', { src, alt: 'The photo for this item', referrerpolicy: 'no-referrer' }) : 'No photo'),
