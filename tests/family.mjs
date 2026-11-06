@@ -254,6 +254,44 @@ const h1 = (p, name) => p.getByRole('heading', { level: 1, name }).waitFor();
   step('Jane adds 3 wool socks with a note, both in view on the form; the card and the item page show them to John');
 }
 
+// ------------------------------------------------------------ one gift for only some people
+{
+  const a = await pageFor(U.Jane, { width: 390, height: 800 });
+  await a.goto(BASE + '/lists', { waitUntil: 'networkidle' });
+  await a.getByRole('button', { name: 'Add an item' }).click();
+  await a.getByLabel('What is it?').fill('Concert tickets');
+  assert.ok(await a.getByLabel('Everyone who can see this list').isChecked(), 'everyone is the default');
+  await a.getByLabel('Only the people I pick').check();
+  assert.equal(await a.getByLabel('Jane', { exact: true }).count(), 0, 'you are not offered to yourself');
+  await a.getByLabel('Mary', { exact: true }).check();
+  assert.ok((await a.locator('form:has(#f-save)').innerText()).includes('Anyone who already bought it keeps seeing it.'));
+  await a.getByRole('button', { name: 'Add to the list' }).click();
+  await toast(a, 'Added to your list.');
+  const mine = a.locator('.wl-card', { hasText: 'Concert tickets' });
+  assert.ok((await mine.innerText()).includes('Shown only to Mary'), 'Jane\'s card says who sees it');
+  step('Jane adds concert tickets shown only to Mary; her card says "Shown only to Mary"');
+
+  const m = await pageFor(U.Mary);
+  await m.goto(BASE + `/lists?list=${id.Jane}`, { waitUntil: 'networkidle' });
+  const seen = m.locator('.wl-card', { hasText: 'Concert tickets' });
+  assert.ok((await seen.innerText()).includes('Shown only to some people') && !(await seen.innerText()).includes('Mary'),
+    'Mary sees it, told it is limited, without the names');
+  const c = await pageFor(U.Carlos);
+  await c.goto(BASE + `/lists?list=${id.Jane}`, { waitUntil: 'networkidle' });
+  assert.equal(await c.locator('.wl-card', { hasText: 'Concert tickets' }).count(), 0, 'Carlos does not see it');
+  step('Mary sees it marked "Shown only to some people"; Carlos does not see it at all');
+
+  await mine.locator('.wl-card__link').click();
+  await a.getByRole('button', { name: 'Edit' }).click();
+  assert.ok(await a.getByLabel('Only the people I pick').isChecked() && await a.getByLabel('Mary', { exact: true }).isChecked(), 'the edit form keeps the choice');
+  await a.getByLabel('Everyone who can see this list').check();
+  await a.getByRole('button', { name: 'Save changes' }).click();
+  await a.locator('#toastText').waitFor();
+  await c.reload({ waitUntil: 'networkidle' });
+  assert.equal(await c.locator('.wl-card', { hasText: 'Concert tickets' }).count(), 1, 'Carlos sees it once it is for everyone');
+  step('Editing it back to everyone who can see the list shows it to Carlos');
+}
+
 // ------------------------------------------------------------ the names of this wish list
 {
   const s = await pageFor(john);

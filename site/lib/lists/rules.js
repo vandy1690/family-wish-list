@@ -124,6 +124,16 @@ export function drawnFor(state, me) {
   return out;
 }
 
+// One gift can be limited further (`audience` on the item). Who always sees a limited gift:
+// the person who added it, the list's owner and a kid's parents (for their own gifts, never a
+// secret idea), the admin, and anyone who already bought it or chipped in.
+export function seesItem(state, me, it, drawn = drawnFor(state, me)) {
+  if (!canSee(state, me, it.ownerId, drawn)) return false;
+  if (!Array.isArray(it.audience) || me.admin || it.addedBy === me.id || it.audience.includes(me.id)) return true;
+  if (!it.secret && keepsList(relation(state, me, it.ownerId))) return true;
+  return state.buys.some(b => b.itemId === it.id && b.buyerId === me.id) || state.chips.some(c => c.itemId === it.id && c.personId === me.id);
+}
+
 export function canSee(state, me, ownerId, drawn = drawnFor(state, me)) {
   if (ownerId === me.id || me.admin) return true;
   const owner = state.people.find(p => p.id === ownerId);
@@ -171,17 +181,20 @@ export function view(state, me, now = Date.now()) {
     return out;
   });
   // Everyone who can sign in, by name only: for choosing who sees a list.
-  const members = state.people.filter(p => p.email).map(p => ({ id: p.id, name: p.name }))
+  const members = state.people.filter(p => p.email).map(p => ({ id: p.id, name: p.name, ...(p.admin ? { admin: true } : {}) }))
     .sort((a, b) => a.name.localeCompare(b.name));
 
   const items = [];
   for (const it of state.items) {
-    if (!sees(it.ownerId)) continue;
+    if (!seesItem(state, me, it, drawn)) continue;
     const rel = relation(state, me, it.ownerId);
     const t = itemTotals(state, it, now);
+    const mayEdit = it.secret ? it.addedBy === me.id : keepsList(rel);
     const base = {
       id: it.id, ownerId: it.ownerId, title: it.title, url: it.url || '', store: it.store || '',
-      image: it.image || '', priceCents: it.priceCents ?? null, note: it.note || '', createdAt: it.createdAt, rel
+      image: it.image || '', priceCents: it.priceCents ?? null, note: it.note || '', createdAt: it.createdAt, rel,
+      // Everyone who sees a limited gift is told so; only whoever can change it sees the names.
+      limited: Array.isArray(it.audience), ...(mayEdit && Array.isArray(it.audience) ? { audience: it.audience } : {})
     };
     if (hidesPurchases(rel)) {
       // The owner's copy: no secret ideas, nothing they removed, nothing already given,
@@ -298,9 +311,11 @@ export function validate(body) {
     if (url === null) throw new OpError('invalid', 'That link does not look right. Paste the whole address, starting with https.', 400);
     const title = oneLine(body.title, LIMITS.title);
     if (!title) throw new OpError('invalid', 'Say what it is.', 400);
+    // Who can see this gift: null (everyone who can see the list) or the grown-ups chosen.
+    const audience = Array.isArray(body.audience) ? [...new Set(body.audience.filter(isId))].slice(0, LIMITS.people) : null;
     return {
       url, title, store: storeOf(url), image: cleanImage(body.image), priceCents: parsePrice(body.price),
-      note: multiLine(body.note, LIMITS.note), qty: qtyOf(body.qty)
+      note: multiLine(body.note, LIMITS.note), qty: qtyOf(body.qty), audience
     };
   };
   switch (op) {
@@ -460,6 +475,12 @@ export function apply(state, op, me, now = Date.now()) {
   const adminOnly = () => { if (!me.admin) throw new OpError('forbidden', `Only ${boss} can change who is on the list.`, 403); };
   const drawn = drawnFor(state, me);
   const visible = ownerId => canSee(state, me, ownerId, drawn);
+  const seen = it => seesItem(state, me, it, drawn);
+  // A gift's audience keeps only grown-ups who would not see it anyway: not the person adding
+  // it, and for the owner's own gifts not the owner or a kid's parents. A secret idea never
+  // goes to the person it is for.
+  const giftAudience = (list, owner, secret) => (list === null ? null : list.filter(id => id !== me.id && person(id)?.email
+    && id !== owner.id && (secret || !(owner.managers || []).includes(id))));
   const draw = id => {
     const d = (state.draws || []).find(x => x.id === id);
     if (!d) throw new OpError('not_found', 'That draw is no longer here.', 409);
@@ -490,22 +511,24 @@ export function apply(state, op, me, now = Date.now()) {
       state.items.push({
         id, ownerId: owner.id, addedBy: me.id, secret: rel === 'shop',
         url: op.url, store: op.store, title: op.title, image: op.image, priceCents: op.priceCents,
-        note: op.note, qty: op.qty, createdAt: now, editedAt: null, removedAt: null
+        note: op.note, qty: op.qty, audience: giftAudience(op.audience, owner, rel === 'shop'),
+        createdAt: now, editedAt: null, removedAt: null
       });
       return id;
     }
     case 'editItem': {
       const it = item(op.id);
-      if (!it || it.removedAt || !visible(it.ownerId)) throw NOT_FOUND();
+      if (!it || it.removedAt || !seen(it)) throw NOT_FOUND();
       if (!canChangeItem(it)) throw new OpError('forbidden', 'Only the person who added this can change it.', 403);
       Object.assign(it, { url: op.url, store: op.store, title: op.title, image: op.image,
-        priceCents: op.priceCents, note: op.note, qty: op.qty, editedAt: now });
+        priceCents: op.priceCents, note: op.note, qty: op.qty,
+        audience: giftAudience(op.audience, person(it.ownerId) || { id: it.ownerId }, Boolean(it.secret)), editedAt: now });
       return it.id;
     }
     case 'removeItem': {
       const it = item(op.id);
       if (!it || it.removedAt) return op.id;       // already gone: same answer either way
-      if (!visible(it.ownerId) || !canChangeItem(it)) throw new OpError('forbidden', 'Only the person who added this can remove it.', 403);
+      if (!seen(it) || !canChangeItem(it)) throw new OpError('forbidden', 'Only the person who added this can remove it.', 403);
       // If someone already bought it, keep it for the buyers so they find out. The
       // owner gets exactly the same answer either way, so nothing is given away.
       const open = state.buys.some(b => b.itemId === it.id && !isGiven(b, now));
@@ -517,7 +540,7 @@ export function apply(state, op, me, now = Date.now()) {
     }
     case 'buy': {
       const it = item(op.itemId);
-      if (!it || !visible(it.ownerId)) throw NOT_FOUND();
+      if (!it || !seen(it)) throw NOT_FOUND();
       shoppable(it);
       if (it.removedAt) throw new OpError('removed', 'This was taken off the list, so it cannot be marked bought.', 409);
       const t = itemTotals(state, it, now);
@@ -545,7 +568,7 @@ export function apply(state, op, me, now = Date.now()) {
     }
     case 'chip': {
       const it = item(op.itemId);
-      if (!it || !visible(it.ownerId)) throw NOT_FOUND();
+      if (!it || !seen(it)) throw NOT_FOUND();
       shoppable(it);
       const mine = state.chips.find(c => c.itemId === it.id && c.personId === me.id);
       if (op.cents === 0) { state.chips = state.chips.filter(c => c !== mine); return null; }

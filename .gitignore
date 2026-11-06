@@ -4,3 +4,5 @@ node_modules/
 .env*
 .vercel/
 .DS_Store
+# Copies like "file 2.mjs" that iCloud Drive makes on a sync conflict
+* 2.*

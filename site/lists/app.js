@@ -624,7 +624,7 @@
     const yours = owner.rel === 'own';
     const kids = yours ? keptKids() : [];
     const skip = new Set([me().id, owner.id, ...(owner.managers || [])]);
-    const choices = S.data.members.filter(m => !skip.has(m.id));
+    const choices = S.data.members.filter(m => !skip.has(m.id) && !m.admin);   // the admin always sees every list
     const whose = yours ? 'your list' : `${possessive(owner.name)} list`;
     const mode = m => () => { f.mode = m; S.focus = `input[name="sh-mode"][value="${m}"]`; draw(); };
     const notes = [yours ? null : `${possessive(owner.name)} parents always can.`,
@@ -893,6 +893,8 @@
     if (it.priceCents !== null && it.priceCents !== undefined) meta.push(el('span', { class: 'wl-price' }, money(it.priceCents)));
     if (it.qty > 1) meta.push(el('span', null, shopper && it.bought ? `${it.need} of ${it.qty} still needed` : `Wants ${it.qty}`));
     const tags = statusTags(it, owner);
+    const limited = limitTag(it);
+    if (limited) tags.push(limited);
     const done = shopper && !it.removed && it.need === 0;
     return el('li', { class: 'wl-card' + (done ? ' wl-card--done' : '') }, art(it),
       el('div', { class: 'wl-card__body' },
@@ -933,6 +935,8 @@
         el('p', { class: 'wl-detail__note' }, it.note)));
     }
     const tags = statusTags(it, owner, true);
+    const limited = limitTag(it);
+    if (limited) tags.push(limited);
     if (tags.length) body.append(el('p', { class: 'wl-detail__tags' }, tags));
     if (shopper) {
       for (const b of it.buys) {
@@ -1065,7 +1069,7 @@
   function openAdd(ownerId) {
     openLayer('add', () => {
       S.panel = null;
-      S.form = { kind: 'add', ownerId, values: { url: '', title: '', image: '', price: '', note: '', qty: '1' } };
+      S.form = { kind: 'add', ownerId, values: { url: '', title: '', image: '', price: '', note: '', qty: '1', audienceMode: 'all', audience: [] } };
       S.focus = '#f-title';
     }, '#addBtn');
   }
@@ -1076,7 +1080,8 @@
       S.form = { kind: 'edit', id: it.id, ownerId: it.ownerId, values: {
         url: it.url || '', title: it.title, image: it.image || '', note: it.note || '',
         price: it.priceCents === null || it.priceCents === undefined ? '' : String(it.priceCents / 100),
-        qty: String(it.qty || 1) } };
+        qty: String(it.qty || 1), audienceMode: Array.isArray(it.audience) ? 'some' : 'all', audience: [...(it.audience || [])] },
+        secret: Boolean(it.secret) };
       S.focus = '#f-title';
     }, '#editBtn');
   }
@@ -1085,6 +1090,51 @@
     // Where an item can go: my list, kids I keep, then a secret idea for anyone else.
     return orderedPeople().map(p => ({ value: p.id,
       label: p.rel === 'own' ? 'My list' : keeps(p.rel) ? `${possessive(p.name)} list (you keep it)` : `Secret idea for ${p.name}` }));
+  }
+
+  // Who can see one gift: everyone who can see the list, or only the people picked. Offered:
+  // grown-ups who would not see it anyway (not you; for the owner's own gifts not the owner or
+  // a kid's parents; for a secret idea never the person it is for), and only those who can see
+  // the list when you know who that is.
+  function giftChoices(owner, secret) {
+    const keepers = owner.managers || [];
+    const skip = new Set([me().id, owner.id, ...(secret ? [] : keepers)]);
+    // The admin always sees every gift, so picking them would change nothing.
+    let list = S.data.members.filter(m => !skip.has(m.id) && !m.admin);
+    if (Array.isArray(owner.audience)) list = list.filter(m => owner.audience.includes(m.id) || keepers.includes(m.id));
+    return list;
+  }
+
+  function giftAudienceField(f, owner) {
+    const v = f.values;
+    const secret = f.kind === 'edit' ? Boolean(f.secret) : !keeps(owner.rel);
+    const choices = giftChoices(owner, secret);
+    const mode = m => () => { v.audienceMode = m; S.focus = `input[name="f-who"][value="${m}"]`; draw(); };
+    const always = [secret ? `${owner.name} never sees a secret idea.` : null,
+      !secret && owner.rel !== 'own' ? `${possessive(owner.name)} parents always see it.` : null,
+      me().admin ? null : `${S.data.site.adminName} can always see every gift, to help.`,
+      'Anyone who already bought it keeps seeing it.'].filter(Boolean).join(' ');
+    return el('fieldset', { class: 'sdc-fieldset' },
+      el('legend', null, 'Who can see this gift?'),
+      el('div', { class: 'sdc-choice-set' },
+        choice({ name: 'f-who', value: 'all', label: 'Everyone who can see this list', checked: v.audienceMode !== 'some', onchange: mode('all') }),
+        choice({ name: 'f-who', value: 'some', label: 'Only the people I pick', checked: v.audienceMode === 'some', onchange: mode('some') })),
+      v.audienceMode === 'some' ? (choices.length
+        ? el('div', { class: 'sdc-choice-set', role: 'group', 'aria-label': 'Pick who can see it' }, choices.map(m => choice({ name: 'f-who-pick', value: m.id, label: m.name,
+            radio: false, checked: (v.audience || []).includes(m.id),
+            onchange: e => { v.audience = e.target.checked ? [...(v.audience || []), m.id] : (v.audience || []).filter(x => x !== m.id); } })))
+        : el('p', null, 'There is nobody else to pick.')) : null,
+      v.audienceMode === 'some' ? el('p', { class: 'sdc-fieldset__desc' }, always) : null);
+  }
+
+  // A gift shown to only some people says so: names for whoever can change it, a plain
+  // "some people" for everyone else, so nobody mentions it to the wrong person.
+  function limitTag(it) {
+    if (!it.limited) return null;
+    if (!Array.isArray(it.audience)) return tag('idea', 'Shown only to some people');
+    const names = it.audience.map(id => (S.data.members.find(m => m.id === id) || {}).name).filter(Boolean);
+    if (!names.length) return tag('idea', 'Shown to no one else');
+    return tag('idea', names.length <= 3 ? `Shown only to ${joinNames(names)}` : `Shown only to ${names.length} people`);
   }
 
   function itemForm() {
@@ -1123,6 +1173,7 @@
           options: Array.from({ length: 10 }, (_, i) => ({ value: String(i + 1), label: String(i + 1) })), onchange: set('qty') })),
       field({ id: 'f-note', label: 'Notes (optional)', multiline: true, rows: 3, value: v.note,
         attrs: { maxlength: 400 }, hint: 'Size, color, or anything that helps, like: Size L, any color but pink.', oninput: set('note') }),
+      giftAudienceField(f, owner),
       el('details', { class: 'wl-more', open: more, ontoggle: e => { f.moreOpen = e.target.open; } },
         el('summary', null, src ? 'Photo' : 'Add a photo (optional)'),
         el('div', { class: 'wl-form' },
@@ -1171,7 +1222,8 @@
     if (f.error || f.urlError) { S.focus = f.error ? '#f-title' : '#f-url'; draw(); return; }
     $('f-save').disabled = true;
     const owner = person(f.ownerId);
-    const body = { url: v.url, title: v.title, image: v.image, price: v.price, note: v.note, qty: v.qty };
+    const body = { url: v.url, title: v.title, image: v.image, price: v.price, note: v.note, qty: v.qty,
+      audience: v.audienceMode === 'some' ? (v.audience || []) : null };
     const text = f.kind === 'edit' ? 'Saved.'
       : owner.rel === 'own' ? 'Added to your list.'
       : keeps(owner.rel) ? `Added to ${possessive(owner.name)} list.`
