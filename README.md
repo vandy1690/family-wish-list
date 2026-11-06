@@ -22,6 +22,8 @@ Store wish lists tie a family to one store, and most list apps assume everyone i
 - **The person a list is for never sees** purchases, chip-ins or secret ideas.
 - **Kids' lists,** kept by their parents. A child needs no email; a parent adds the list and decides whether the parents see purchases.
 - **Who can see a list:** everyone in the family, or only the people the owner picks.
+- **Who can see one gift:** any gift can be shown to only the people you pick, like a surprise the rest of the family is in on. The people picked see it marked "Shown only to some people", so nobody mentions it to the wrong person.
+- **How many and notes on every gift,** right on the form: "3 pairs, size L, any color but pink." Cards show the start of the note.
 - **Draw names** (Secret Santa). Only the giver sees who they drew, not even the person who started the draw. Spending limit, give-by date, and pairs to keep apart; parents and their own kids never draw each other.
 - **Ask to join.** A relative who is not on the list can ask from the sign-in page. Only the admin adds people.
 - **My shopping:** everything you bought, in one place. Tap "It has been given" after a gift is opened. Anything still marked bought counts as given on December 26.
@@ -36,7 +38,7 @@ Store wish lists tie a family to one store, and most list apps assume everyone i
 
 ## The promise, kept on the server
 
-Hiding purchases in the page is not enough: anyone can open a browser's developer tools and read the data a page receives. So the rule lives on the server, in [`site/lib/lists/rules.js`](site/lib/lists/rules.js) (`view()`). When you open your own list, your browser is never sent who bought what, who chipped in, or the secret ideas others added. The same function leaves out lists that are not shared with you, and the full list of name draw matches is never sent to anyone.
+Hiding purchases in the page is not enough: anyone can open a browser's developer tools and read the data a page receives. So the rule lives on the server, in [`site/lib/lists/rules.js`](site/lib/lists/rules.js) (`view()`). When you open your own list, your browser is never sent who bought what, who chipped in, or the secret ideas others added. The same function leaves out lists and gifts that are not shared with you, and the full list of name draw matches is never sent to anyone.
 
 Every change goes through the same file (`apply()`), which checks who is asking before it saves anything. The API tests check the rule from every side, including twelve random name draws per run checked against every pairing rule.
 
@@ -56,9 +58,9 @@ Every change goes through the same file (`apply()`), which checks who is asking 
 
 Everything is driven the way a person would use it, in a real browser:
 
-- **api:** about 400 checks of the rules, sign-in, photos, link lookups, robots.txt, list sharing, join requests and name draws.
+- **api:** over 400 checks of the rules, sign-in, photos, link lookups, robots.txt, list and gift sharing, join requests and name draws.
 - **flow, onboard, family:** click-through suites in Chromium on a computer and a phone, from first sign-in to drawing names.
-- **screens:** 48 screens in light and dark, at phone and computer widths, each run through [axe](https://github.com/dequelabs/axe-core) for WCAG 2.2 AA, with checks for sideways scrolling and page errors.
+- **screens:** 49 screens in light and dark, at phone and computer widths, each run through [axe](https://github.com/dequelabs/axe-core) for WCAG 2.2 AA, with checks for sideways scrolling and page errors.
 - **grid:** fields that sit side by side line up.
 - **check:styles:** proves the trimmed design system styles match the full ones, element by element.
 

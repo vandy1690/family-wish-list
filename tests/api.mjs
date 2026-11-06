@@ -392,6 +392,54 @@ const mary = new User('mary@example.com'), carlos = new User('carlos@example.com
   ok(s2.data.people.some(p => p.id === ids.Lucy) && Array.isArray(s2.data.people.find(p => p.id === ids.Lucy).audience), 'john sees every list, and its sharing');
 }
 
+// One gift for only some people. The rest never receive it at all.
+{
+  const giftFor = async (u, body) => (await u.op({ op: 'addItem', qty: 1, ...body })).data;
+  let d = await giftFor(jane, { ownerId: ids.Jane, title: 'Surprise party supplies', audience: [ids.Grandma, ids.Jane, ids.Mary] });
+  const party = d.id;
+  const mine = d.items.find(i => i.id === party);
+  ok(mine.limited && mine.audience.join() === [ids.Grandma, ids.Mary].join(), 'jane limits a gift to Grandma and Mary (not herself): ' + JSON.stringify(mine.audience));
+  let g = await grandma.data();
+  const gi = g.data.items.find(i => i.id === party);
+  ok(gi && gi.limited && !('audience' in gi), 'grandma sees it, told it is limited, without the names');
+  let c = await carlos.data();
+  ok(!c.data.items.some(i => i.id === party), 'carlos, not picked, never receives it');
+  r = await carlos.op({ op: 'buy', itemId: party, qty: 1 });
+  ok(r.status === 409 && !r.data.items.some(i => i.id === party), 'nor can he buy it, and the answer gives nothing away');
+  r = await carlos.op({ op: 'chip', itemId: party, amount: '5' });
+  ok(r.status === 409, 'nor chip in');
+  r = await carlos.op({ op: 'editItem', id: party, title: 'Hacked', qty: 1 });
+  ok(r.status === 409, 'nor change it');
+  ok((await john.data()).data.items.some(i => i.id === party), 'the admin sees every gift');
+  r = await grandma.op({ op: 'buy', itemId: party, qty: 1 });
+  ok(r.status === 200, 'grandma buys it');
+  d = (await jane.op({ op: 'editItem', id: party, title: 'Surprise party supplies', qty: 1, audience: [ids.Mary] })).data;
+  ok(d.items.find(i => i.id === party).audience.join() === ids.Mary, 'jane narrows it to Mary');
+  g = await grandma.data();
+  ok(g.data.items.some(i => i.id === party), 'grandma, who bought it, still sees it');
+  d = (await jane.op({ op: 'editItem', id: party, title: 'Surprise party supplies', qty: 1, audience: null })).data;
+  ok(!d.items.find(i => i.id === party).limited, 'no audience means everyone who can see the list');
+  c = await carlos.data();
+  ok(c.data.items.some(i => i.id === party), 'carlos sees it now');
+
+  d = await giftFor(grandma, { ownerId: ids.Jane, title: 'Spa day', audience: [ids.Mary, ids.Jane] });
+  const spa = d.id;
+  ok(d.items.find(i => i.id === spa).secret && d.items.find(i => i.id === spa).audience.join() === ids.Mary,
+    'a secret idea can be limited too; the person it is for is dropped');
+  ok(!(await jane.data()).data.items.some(i => i.id === spa), 'jane never sees the idea for her');
+  ok((await mary.data()).data.items.find(i => i.id === spa)?.secret === true, 'mary, picked, sees the secret idea');
+  ok(!(await carlos.data()).data.items.some(i => i.id === spa), 'carlos does not');
+  r = await mary.op({ op: 'editItem', id: spa, title: 'Spa day', qty: 1, audience: null });
+  ok(r.status === 403, 'only whoever added an idea can change who sees it');
+
+  d = await giftFor(carlos, { ownerId: ids.Lucy, title: 'Bike helmet', audience: [ids.Jane] });
+  const helmet = d.id;
+  ok(d.items.some(i => i.id === helmet), 'a parent sees a limited gift on the kid\'s list');
+  ok((await jane.data()).data.items.some(i => i.id === helmet), 'jane, picked, sees it');
+  ok(!(await grandma.data()).data.items.some(i => i.id === helmet), 'grandma, who can see Lucy\'s list but was not picked, does not');
+  await jane.op({ op: 'removeItem', id: party }); await grandma.op({ op: 'removeItem', id: spa }); await carlos.op({ op: 'removeItem', id: helmet });
+}
+
 // Asking to join, from the sign-in page. John stays the gatekeeper.
 {
   const anon = new User('');

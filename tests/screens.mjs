@@ -184,6 +184,12 @@ for (const width of [390, 1280]) {
 await shot(U.Sam, '21-draws', '/lists?view=draws', { width: 390, height: 844, doc: 'draw-names-phone' });
 await shot(U.Suzy, '21-draws-parent', '/lists?view=draws');
 await shot(U.Sam, '21-draws', '/lists?view=draws', { theme: 'dark' });
+await shot(U.Sam, '23-gift-audience', '/lists', { width: 390, act: async p => {
+  await p.getByRole('button', { name: 'Add an item' }).click();
+  await p.getByLabel('What is it?').fill('Concert tickets');
+  await p.getByLabel('Only the people I pick').check();
+  await p.getByLabel('Grandma', { exact: true }).check();
+} });
 await shot(john, '22-draw-form', '/lists?view=draws', { width: 390, act: async p => { await p.getByRole('button', { name: 'Start a name draw' }).click(); } });
 await shot(U.Suzy, '18-kid-remove', `/lists?list=${id.Ella}`, { width: 390, act: async p => { await p.getByRole('button', { name: 'Remove this list' }).click(); } });
 await shot(U.Sam, '15-tour', '/lists', { full: false, doc: 'tour-desktop', act: async p => { await p.getByRole('button', { name: 'How it works' }).click(); await p.locator('.wl-tour[open]').waitFor(); } });
