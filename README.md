@@ -22,7 +22,7 @@ Store wish lists tie a family to one store, and most list apps assume everyone i
 - **The person a list is for never sees** purchases, chip-ins or secret ideas.
 - **Kids' lists,** kept by their parents. A child needs no email; a parent adds the list and decides whether the parents see purchases.
 - **Who can see a list:** everyone in the family, or only the people the owner picks.
-- **Who can see one gift:** any gift can be shown to only the people you pick, like a surprise the rest of the family is in on. The people picked see it marked "Shown only to some people", so nobody mentions it to the wrong person.
+- **Who can see one gift:** any gift can be shown to only the people you pick, like a surprise the rest of the family is in on. That includes the admin: a surprise for the admin stays a surprise unless you pick them. The people picked see it marked "Shown only to some people", so nobody mentions it to the wrong person.
 - **How many and notes on every gift,** right on the form: "3 pairs, size L, any color but pink." Cards show the start of the note.
 - **Draw names** (Secret Santa). Only the giver sees who they drew, not even the person who started the draw. Spending limit, give-by date, and pairs to keep apart; parents and their own kids never draw each other.
 - **Ask to join.** A relative who is not on the list can ask from the sign-in page. Only the admin adds people.
