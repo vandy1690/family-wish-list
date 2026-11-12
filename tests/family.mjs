@@ -91,6 +91,8 @@ const h1 = (p, name) => p.getByRole('heading', { level: 1, name }).waitFor();
   await p.locator('#signinStatus', { hasText: 'will see your request' }).waitFor();
   await s.reload({ waitUntil: 'networkidle' });
   await s.getByRole('button', { name: 'Decline' }).click();
+  await s.getByText("Decline Someone's request?").waitFor();
+  await s.getByRole('button', { name: 'Yes, decline' }).click();
   await toast(s, 'Declined. Nothing is sent to Someone.');
   assert.equal(await s.getByRole('heading', { name: /Asking to join/ }).count(), 0);
   step('Decline clears a request from someone John does not know');
@@ -108,8 +110,8 @@ const h1 = (p, name) => p.getByRole('heading', { level: 1, name }).waitFor();
   assert.equal(await d.getByLabel('Maria Garcia', { exact: true }).count(), 1, 'every grown-up can be picked');
   await d.getByLabel("Use the same for Lucy's list").check();
   await d.getByRole('button', { name: 'Save' }).click();
-  await toast(d, 'Saved. Only Jane and Cousin Pat can see your list.');
-  assert.ok((await d.locator('.wl-listhead').innerText()).includes('Only Jane and Cousin Pat can see your list.'));
+  await toast(d, 'Saved. Only you, Jane, Cousin Pat and John can see your list.');
+  assert.ok((await d.locator('.wl-listhead').innerText()).includes('Only you, Jane, Cousin Pat and John can see your list.'));
   step('Carlos shares his list with only Jane and Cousin Pat, and uses the same for Lucy\'s list');
 
   const t = await pageFor(U.Mary);
@@ -130,7 +132,7 @@ const h1 = (p, name) => p.getByRole('heading', { level: 1, name }).waitFor();
   step('Mary\'s earlier purchase stays in My shopping, without a link, and she can still mark it given');
 
   await d.goto(BASE + `/lists?list=${id.Lucy}`, { waitUntil: 'networkidle' });
-  assert.ok((await d.locator('.wl-listhead').innerText()).includes("Only Jane and Cousin Pat can see Lucy's list, besides Lucy's parents."));
+  assert.ok((await d.locator('.wl-listhead').innerText()).includes("Only Lucy's parents, Jane, Cousin Pat and John can see Lucy's list."));
   await d.getByRole('button', { name: 'Who can see it' }).click();
   await d.getByLabel('Everyone on the wish list').check();
   await d.getByRole('button', { name: 'Save' }).click();
@@ -217,7 +219,7 @@ const h1 = (p, name) => p.getByRole('heading', { level: 1, name }).waitFor();
 {
   const a = await pageFor(U.Jane, { width: 390, height: 800 });
   await a.goto(BASE + '/lists', { waitUntil: 'networkidle' });
-  await a.getByRole('button', { name: 'Add an item' }).click();
+  await a.getByRole('button', { name: 'Add a gift' }).click();
   // A local address stands in for a store that says no: the lookup is refused, and the
   // name still comes from the link.
   await a.getByLabel('Store link').fill('http://127.0.0.1:9/p/threshold-fleece-throw-blanket/-/A-81234567');
@@ -225,13 +227,43 @@ const h1 = (p, name) => p.getByRole('heading', { level: 1, name }).waitFor();
   await a.locator('#toastText', { hasText: 'The name was filled in from the link' }).waitFor();
   assert.equal(await a.getByLabel('What is it?').inputValue(), 'Threshold Fleece Throw Blanket');
   step('A store that refuses the lookup still gets its name filled in, from the link alone');
+
+  // The link is checked too: a bare number address over http gets a warning under Store link.
+  const box = a.locator('#f-url-check');
+  assert.equal(await box.locator('.wl-linkcheck__title').innerText(), 'This link looks unsafe');
+  const said = await box.innerText();
+  assert.ok(/number instead of a website name/.test(said) && /not secure/.test(said), 'says why: ' + said);
+  assert.ok((await a.getByLabel('Store link').getAttribute('aria-describedby')).includes('f-url-check'), 'the warning is tied to the field');
+  assert.ok(/This link looks unsafe/.test(await a.locator('#toastText').innerText()), 'and the message points to it');
+  await a.getByLabel('Store link').fill('https://www.lego.com/en-us/product/millennium-falcon-75192');
+  assert.equal(await box.count(), 0, 'changing the link takes the old warning away');
+  step('A link that looks unsafe gets a warning under Store link, with the reasons; changing the link clears it');
+}
+
+// ------------------------------------------------------------ sending a list by text or email
+{
+  const a = await pageFor(U.Jane, { width: 390, height: 800 });
+  await a.goto(BASE + '/lists', { waitUntil: 'networkidle' });
+  await a.getByRole('button', { name: 'Share by text or email' }).click();
+  await a.getByRole('heading', { name: 'Share by text or email' }).waitFor();
+  const text = await a.getByRole('link', { name: 'Send a text' }).getAttribute('href');
+  const mail = await a.getByRole('link', { name: 'Send an email' }).getAttribute('href');
+  const listUrl = `${BASE}/lists?list=${id.Jane}`;
+  assert.ok(text.startsWith('sms:') && decodeURIComponent(text).includes(listUrl), 'the text carries the link: ' + text);
+  assert.ok(mail.startsWith('mailto:?subject=My%20wish%20list') && decodeURIComponent(mail).includes(listUrl), 'so does the email: ' + mail);
+  assert.equal(await a.locator('section[aria-labelledby="sendH"]').locator('input, textarea').count(), 0, 'no box to copy a link from');
+  assert.equal(await a.getByRole('button', { name: /copy/i }).count(), 0, 'and no copy button');
+  assert.equal(await a.evaluate(() => document.activeElement.id), 'sendText');
+  await a.getByRole('button', { name: 'Done' }).click();
+  assert.equal(await a.evaluate(() => document.activeElement.id), 'sendBtn', 'Done puts focus back');
+  step('Share by text or email offers a text and an email with the link written in, and nothing to copy');
 }
 
 // ------------------------------------------------------------ how many, and notes, on each gift
 {
   const a = await pageFor(U.Jane, { width: 390, height: 800 });
   await a.goto(BASE + '/lists', { waitUntil: 'networkidle' });
-  await a.getByRole('button', { name: 'Add an item' }).click();
+  await a.getByRole('button', { name: 'Add a gift' }).click();
   assert.ok(await a.getByLabel('How many').isVisible() && await a.getByLabel('Notes (optional)').isVisible(),
     'How many and Notes are in view, nothing to open first');
   await a.getByLabel('What is it?').fill('Wool socks');
@@ -258,7 +290,7 @@ const h1 = (p, name) => p.getByRole('heading', { level: 1, name }).waitFor();
 {
   const a = await pageFor(U.Jane, { width: 390, height: 800 });
   await a.goto(BASE + '/lists', { waitUntil: 'networkidle' });
-  await a.getByRole('button', { name: 'Add an item' }).click();
+  await a.getByRole('button', { name: 'Add a gift' }).click();
   await a.getByLabel('What is it?').fill('Concert tickets');
   assert.ok(await a.getByLabel('Everyone who can see this list').isChecked(), 'everyone is the default');
   await a.getByLabel('Only the people I pick').check();

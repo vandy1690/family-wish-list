@@ -8,16 +8,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<script>
-  // Light unless dark was chosen, set before the page paints.
-  (function () {
-    try {
-      var stored = localStorage.getItem('theme');
-      if (stored === 'dark' || stored === 'light') document.documentElement.setAttribute('data-theme', stored);
-    } catch (e) {}
-  })();
-</script>
+<script src="/lists/theme.js"></script>
 <link rel="icon" type="image/svg+xml" href="/lists/icon.svg">
+<link rel="apple-touch-icon" href="/lists/apple-touch-icon.png">
 <link rel="stylesheet" href="/lists/sdc-lite.css">
 <!--/SDC:HEAD-->
 <title>Wish List</title>
@@ -53,7 +46,7 @@
         <h1 class="sdc-display wl-h1" id="welcomeH" data-site="title">Family Wish List</h1>
       </div>
       <div class="wl-welcome__signin wl-panel">
-        <h2 class="sdc-subhead">Sign in</h2>
+        <h2 class="sdc-subhead" id="signinH">Sign in</h2>
         <p class="sdc-form-status" id="signinStatus" role="status" aria-live="polite"></p>
         <form class="wl-form" id="emailForm" novalidate>
           <div class="sdc-field" id="emailField">
@@ -80,7 +73,7 @@
         </form>
         <!-- Asking to join: only puts a name on the admin's People page. Nobody can sign in until added. -->
         <form class="wl-form" id="requestForm" novalidate hidden>
-          <p id="requestIntro">Tell <span data-site="admin">the admin</span> who you are. Only they can add people. Once you are added, come back here and sign in with this email.</p>
+          <p id="requestIntro">Tell <span data-site="admin">the admin</span> who you are. Only <span data-site="admin">the admin</span> can add people. Once you are added, come back here and sign in with this email.</p>
           <div class="sdc-field">
             <label class="sdc-field__label" for="rq-name">Your name</label>
             <input class="sdc-field__input" id="rq-name" name="name" type="text" autocomplete="name" maxlength="40" required aria-describedby="rq-name-err">
@@ -105,11 +98,11 @@
           <button class="sdc-btn sdc-btn--primary wl-wide" type="submit">Send my request</button>
           <button class="sdc-btn wl-wide" type="button" data-action="back-to-signin">Back to sign in</button>
         </form>
-        <p class="wl-fine">You stay signed in on this device for a year.</p>
+        <p class="wl-fine" id="signinFine">You stay signed in on this device for a year.</p>
       </div>
       <ol class="wl-steps wl-welcome__steps">
         <li><strong class="sdc-subhead">Sign in with your email.</strong> We send you a code. There is no password to remember.</li>
-        <li><strong class="sdc-subhead">Make your list.</strong> Add things from any store, or write in something homemade.</li>
+        <li><strong class="sdc-subhead">Make your list.</strong> Add gifts from any store, or write in something homemade.</li>
         <li><strong class="sdc-subhead">Shop for others.</strong> Tell everyone what you bought. The person it is for never sees it.</li>
       </ol>
     </section>
@@ -118,12 +111,8 @@
     <div class="wl-view" id="view" hidden></div>
   </sdc-layout-container>
 </sdc-section>
-</main>
-
-<footer class="wl-foot">
-  <p>Questions, or trouble signing in? <a class="wl-foot__mail" id="mailAdmin" href="#" hidden><span>Email <span data-site="admin">the admin</span></span></a></p>
-</footer>
-<!-- Messages: fixed to the bottom of the screen so they are seen wherever the person tapped. -->
+<!-- Messages: fixed to the bottom of the screen so they are seen wherever the person tapped.
+     Inside main, so the bar belongs to a landmark like everything else on the page. -->
 <!-- Screen readers hear messages from #status; the bar below is what eyes see. Two pieces so
      the bar can be fully hidden when empty without the announcements going quiet. -->
 <p class="sdc-u-sr-only" id="status" role="status" aria-live="polite"></p>
@@ -131,5 +120,10 @@
   <p class="wl-toast__text" id="toastText"></p>
   <button class="sdc-btn wl-toast__ok" type="button" data-action="toast-close">OK</button>
 </div>
+</main>
+
+<footer class="wl-foot" id="foot">
+  <p><span id="footAsk">Questions, or trouble signing in? </span><a class="wl-foot__mail" id="mailAdmin" href="#" hidden><span>Email <span data-site="admin">the admin</span></span></a></p>
+</footer>
 </body>
 </html>

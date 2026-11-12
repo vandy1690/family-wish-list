@@ -38,6 +38,13 @@ export async function GET(request) {
 
 export async function POST(request) {
   if (!isSameSiteJson(request)) return json(BAD, 400);
+  // Signed in first, so nobody else can make the server read a large upload.
+  try {
+    if (!(await signedIn(request))) return json({ error: 'signed_out', message: 'Sign in again first.' }, 401);
+  } catch (e) {
+    console.error('photo auth failed', e);
+    return json({ error: 'server_error', message: 'The photo could not be saved. Try again in a moment.' }, 500);
+  }
   const body = await readJson(request, MAX + 1000);
   const m = body && typeof body.data === 'string' && body.data.match(/^data:image\/(?:jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$/);
   if (!m) return json({ error: 'invalid', message: 'That photo could not be read. Try a JPEG or PNG.' }, 400);
@@ -45,7 +52,6 @@ export async function POST(request) {
   const type = kind(bytes);
   if (!type) return json({ error: 'invalid', message: 'That file is not a photo. Try a JPEG or PNG.' }, 400);
   try {
-    if (!(await signedIn(request))) return json({ error: 'signed_out', message: 'Sign in again first.' }, 401);
     const id = randomBytes(12).toString('hex');
     await putPhoto(id, bytes, type);
     return json({ ok: true, image: `photo:${id}` });

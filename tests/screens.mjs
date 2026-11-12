@@ -74,6 +74,8 @@ await john.op({ op: 'chip', itemId: bag, amount: '100' });
 // Ben
 const shelby = await add(U.Ben, id.Ben, { url: 'https://www.lego.com/en-us/product/shelby-cobra-427-s-c-10357', title: 'Shelby Cobra 427 S/C', price: '159.99', image: await U.Ben.photo('shelby') });
 await add(U.Ben, id.Ben, { url: 'https://www.lego.com/en-us/product/nasa-artemis-space-launch-system-10341', title: 'NASA Artemis Space Launch System', price: '259.99', image: await U.Ben.photo('artemis') });
+// A link that looks unsafe: one letter off a big store's name (checked without the network here).
+const lookalike = await add(U.Ben, id.Ben, { url: 'https://amazom.com/deals/lego-technic', title: 'LEGO Technic set, 70% off', price: '39.99' });
 await john.op({ op: 'buy', itemId: shelby, qty: 1 });
 
 // Ella, kept by Aunt Suzy
@@ -184,8 +186,23 @@ for (const width of [390, 1280]) {
 await shot(U.Sam, '21-draws', '/lists?view=draws', { width: 390, height: 844, doc: 'draw-names-phone' });
 await shot(U.Suzy, '21-draws-parent', '/lists?view=draws');
 await shot(U.Sam, '21-draws', '/lists?view=draws', { theme: 'dark' });
+// The link check: under Store link in the form, and above the store button on a gift's page.
+await shot(john, '24-link-warning-form', `/lists?list=${id.John}`, { width: 390, height: 844, act: async p => {
+  await p.getByRole('button', { name: 'Add a gift' }).click();
+  await p.getByLabel('Store link (optional)').fill('http://127.0.0.1:9/p/sale-item');
+  await p.getByRole('button', { name: 'Get details from the link' }).click();
+  await p.locator('#f-url-check').waitFor();
+} });
+for (const theme of ['light', 'dark']) await shot(john, '25-link-warning-item', `/lists?item=${lookalike}`, { theme, width: 390, height: 844 });
+await shot(john, '25-link-warning-list', `/lists?list=${id.Ben}`);
+// Sending a list by text or email.
+for (const [width, theme] of [[390, 'light'], [1280, 'dark']]) {
+  await shot(U.Sam, '26-send-list', '/lists', { width, theme, height: width === 390 ? 844 : 900, act: async p => {
+    await p.getByRole('button', { name: 'Share by text or email' }).click();
+  } });
+}
 await shot(U.Sam, '23-gift-audience', '/lists', { width: 390, act: async p => {
-  await p.getByRole('button', { name: 'Add an item' }).click();
+  await p.getByRole('button', { name: 'Add a gift' }).click();
   await p.getByLabel('What is it?').fill('Concert tickets');
   await p.getByLabel('Only the people I pick').check();
   await p.getByLabel('Grandma', { exact: true }).check();

@@ -2,7 +2,8 @@
 // POST { email, code }  -> checks the code and signs this device in
 //
 // The answer to the first is the same whether or not the address is on the list, so
-// the page cannot be used to find out who is.
+// the page cannot be used to find out who is. Every answer also takes about the same time
+// (MIN_REPLY), since sending an email is slower than sending nothing.
 //
 // The very first sign-in: while nobody is on the list yet, LISTS_ADMIN_EMAIL may sign in
 // and becomes the admin, named LISTS_ADMIN_NAME (default "Admin"; it can be changed on People).
@@ -14,6 +15,7 @@ import { sendSignIn, mailConfigured } from '../mail.js';
 import { siteInfo } from '../site.js';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+const MIN_REPLY = 1500;               // ms; every answer takes at least this long, plus a little
 const RESEND_AFTER = 45_000;          // one email per address per 45 seconds
 const DAILY_SENDS = 10;               // and no more than this many a day
 const sent = site => ({
@@ -30,12 +32,16 @@ export async function POST(request) {
   const body = await readJson(request);
   const email = normEmail(body && body.email);
   if (!email || !email.includes('@')) return json({ error: 'invalid', message: 'Enter your email address.' }, 400);
+  const started = Date.now();
+  let res;
   try {
-    return body.code !== undefined ? await checkCode(email, body.code) : await sendLink(request, email);
+    res = body.code !== undefined ? await checkCode(email, body.code) : await sendLink(request, email);
   } catch (e) {
     console.error('login failed', e);
-    return json({ error: 'server_error', message: 'Sign-in is having trouble. Try again in a moment.' }, 500);
+    res = json({ error: 'server_error', message: 'Sign-in is having trouble. Try again in a moment.' }, 500);
   }
+  await sleep(Math.max(0, MIN_REPLY + Math.random() * 300 - (Date.now() - started)));
+  return res;
 }
 
 async function sendLink(request, email) {
@@ -46,7 +52,7 @@ async function sendLink(request, email) {
   const bootstrap = !found && state.people.length === 0 && admin && email === admin;
   const site = siteInfo(state);
   const SENT = sent(site);
-  if (!found && !bootstrap) { await sleep(300 + Math.random() * 500); return json(SENT); }
+  if (!found && !bootstrap) return json(SENT);
   if (found && found.linkAt && now - found.linkAt < RESEND_AFTER) return json(SENT);
 
   const code = newCode();
@@ -64,7 +70,7 @@ async function sendLink(request, email) {
     p.sends = { d: day, n: sends + 1 };
     p.linkAt = now;
     p.code = { h: codeHash(p, code), x: now + LINK_MINUTES * 60_000, n: 0 };
-    return { id: p.id, name: p.name, email: p.email, ver: p.ver || 0 };
+    return { id: p.id, name: p.name, email: p.email, ver: p.ver || 0, linkAt: now };
   });
   if (!p) return json(SENT);
 
@@ -81,17 +87,15 @@ async function sendLink(request, email) {
 
 async function checkCode(email, code) {
   const now = Date.now();
-  const wrong = async () => {
-    await sleep(600);
-    return json({ error: 'wrong_code', message: 'That code is not right, or it has run out. Use the newest email, or send a new code.' }, 401);
-  };
+  const wrong = () => json({ error: 'wrong_code', message: 'That code is not right, or it has run out. Use the newest email, or send a new code.' }, 401);
   const { state } = await readState();
   const found = state.people.find(p => p.email === email);
   if (!found || !found.code) return wrong();
   const { extra } = await updateState(s => {
     const p = s.people.find(x => x.email === email);
     if (!p || !p.code) return null;
-    if (codeMatches(p, code, now)) { p.code = null; return { id: p.id, ver: p.ver || 0, email: p.email }; }
+    // Signed in: the code and the emailed link both stop working.
+    if (codeMatches(p, code, now)) { p.code = null; p.linkAt = null; return { id: p.id, ver: p.ver || 0, email: p.email }; }
     p.code.n = (p.code.n || 0) + 1;
     return null;
   });

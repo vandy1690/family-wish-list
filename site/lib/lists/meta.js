@@ -6,13 +6,18 @@
 // store's robots.txt, and never tries to get past a block. If a store says no, or answers
 // with a robot check, the page says so and the person uses the Add button on the store's
 // page instead, which reads the page they are already looking at in their own browser.
-import { lookup } from 'node:dns/promises';
+import { lookup as dnsLookup } from 'node:dns';
+import http from 'node:http';
+import https from 'node:https';
 import net from 'node:net';
+import zlib from 'node:zlib';
+import { devMode } from './dev.js';
 
 const AGENT = 'FamilyWishList';
 const UA = `${AGENT}/1.0 (+${(process.env.LISTS_ORIGIN || 'https://github.com/vandy1690/family-wish-list').replace(/\/$/, '')}${process.env.LISTS_ORIGIN ? '/lists' : ''}; family wish list link preview)`;
-const TIMEOUT = 6000;
+const TIMEOUT = 8000;               // the whole lookup: robots.txt, redirects and both bodies
 const MAX_BYTES = 1_500_000;
+const MAX_ROBOTS = 500_000;         // the most of a robots.txt that is read, as Google does
 
 export class Blocked extends Error {
   constructor(reason) { super(reason); this.reason = reason; }
@@ -20,70 +25,120 @@ export class Blocked extends Error {
 
 // ---------------------------------------------------------------- address safety
 
-function privateV4(ip) {
-  const [a, b] = ip.split('.').map(Number);
-  return a === 0 || a === 10 || a === 127 || a >= 224 ||
-    (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) ||
-    (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) ||
-    (a === 198 && (b === 18 || b === 19)) || (a === 192 && b === 0);
-}
-function privateIp(ip) {
-  if (net.isIPv4(ip)) return privateV4(ip);
-  const v6 = ip.toLowerCase();
-  const mapped = v6.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (mapped) return privateV4(mapped[1]);
-  return v6 === '::' || v6 === '::1' || v6.startsWith('fc') || v6.startsWith('fd') || v6.startsWith('fe8') ||
-    v6.startsWith('fe9') || v6.startsWith('fea') || v6.startsWith('feb') || v6.startsWith('ff');
+// Every address that is not the public internet: private networks, this machine, link-local,
+// shared and test ranges, multicast, and the IPv6 forms that can carry an IPv4 address inside
+// them (compatible, NAT64, 6to4, Teredo), so none of those can be used to reach inside. An
+// IPv4 address written the IPv6 way (::ffff:10.0.0.1) is checked against the IPv4 ranges by
+// BlockList itself.
+const PRIVATE = new net.BlockList();
+for (const [net4, bits] of [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16],
+  ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.0.2.0', 24], ['192.88.99.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15],
+  ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4]]) PRIVATE.addSubnet(net4, bits, 'ipv4');
+for (const [net6, bits] of [['::', 96], ['64:ff9b::', 96], ['64:ff9b:1::', 48], ['100::', 64],
+  ['2001::', 23], ['2001:db8::', 32], ['2002::', 16], ['fc00::', 7], ['fe80::', 10], ['fec0::', 10], ['ff00::', 8]]) PRIVATE.addSubnet(net6, bits, 'ipv6');
+
+export function privateIp(ip) {
+  const family = net.isIP(ip);
+  if (!family) return true;
+  return PRIVATE.check(ip, family === 4 ? 'ipv4' : 'ipv6');
 }
 
 // Only public web addresses on the normal ports. Stops the lookup being pointed at
 // anything inside Vercel's network.
 // Local tests only: LISTS_LOOKUP_ALLOW_LOCAL=1 lets the lookup read a stand-in store on
-// 127.0.0.1, so the tests never depend on a real store. Ignored on Vercel.
-const allowLocal = url => !process.env.VERCEL && process.env.LISTS_LOOKUP_ALLOW_LOCAL === '1' && url.hostname === '127.0.0.1';
+// 127.0.0.1, so the tests never depend on a real store. Works only inside dev/server.mjs.
+const allowLocal = url => devMode() && process.env.LISTS_LOOKUP_ALLOW_LOCAL === '1' && url.hostname === '127.0.0.1';
 
-async function assertPublic(url) {
+function assertPublic(url) {
   if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Blocked('scheme');
+  if (url.username || url.password) throw new Blocked('private');
   if (allowLocal(url)) return;
   if (url.port && url.port !== '443' && url.port !== '80') throw new Blocked('port');
   const host = url.hostname.replace(/^\[|\]$/g, '');
   if (net.isIP(host)) { if (privateIp(host)) throw new Blocked('private'); return; }
   if (!host.includes('.') || /\.(local|internal|localhost)$/i.test(host)) throw new Blocked('private');
-  const addrs = await lookup(host, { all: true });
-  if (!addrs.length || addrs.some(a => privateIp(a.address))) throw new Blocked('private');
 }
 
-async function getText(url, accept) {
+// The address check happens inside the connection's own name lookup, so the address that
+// was checked is the one connected to. A store's name cannot be switched to a private address
+// between a check and the request.
+export function safeLookup(hostname, options, callback) {
+  dnsLookup(hostname, { ...options, all: true }, (err, addrs) => {
+    if (err) return callback(err);
+    if (!addrs.length || addrs.some(a => privateIp(a.address))) return callback(new Blocked('private'));
+    if (options && options.all) return callback(null, addrs);
+    callback(null, addrs[0].address, addrs[0].family);
+  });
+}
+
+// One GET, no redirects followed, the body cut off at `max` bytes. Rejects with Blocked.
+function getOnce(url, accept, deadline, max) {
+  return new Promise((resolve, reject) => {
+    const left = deadline - Date.now();
+    if (left <= 0) { reject(new Blocked('unreachable')); return; }
+    let settled = false;
+    const done = (fn, v) => { if (!settled) { settled = true; clearTimeout(timer); fn(v); } };
+    const fail = e => done(reject, e instanceof Blocked ? e : new Blocked('unreachable'));
+    const mod = url.protocol === 'https:' ? https : http;
+    const req = mod.request(url, {
+      method: 'GET', lookup: safeLookup, agent: false,
+      headers: { 'User-Agent': UA, Accept: accept, 'Accept-Language': 'en-US,en;q=0.8', 'Accept-Encoding': 'gzip, deflate, br' }
+    }, res => {
+      const status = res.statusCode || 0;
+      if (status >= 300 && status < 400 && res.headers.location) {
+        res.resume();
+        done(resolve, { status, location: res.headers.location });
+        req.destroy();
+        return;
+      }
+      const enc = String(res.headers['content-encoding'] || '').trim().toLowerCase();
+      const body = enc === 'gzip' || enc === 'x-gzip' ? res.pipe(zlib.createGunzip())
+        : enc === 'deflate' ? res.pipe(zlib.createInflate())
+        : enc === 'br' ? res.pipe(zlib.createBrotliDecompress()) : res;
+      const chunks = [];
+      let size = 0;
+      const finish = () => done(resolve, { status, text: new TextDecoder('utf-8', { fatal: false }).decode(Buffer.concat(chunks)) });
+      body.on('data', c => {
+        if (settled) return;
+        size += c.length;
+        chunks.push(c);
+        if (size >= max) { finish(); req.destroy(); }
+      });
+      body.on('end', finish);
+      // Cut off part way (time ran out, or a bad stream): use what arrived, if anything did.
+      body.on('error', e => (size ? finish() : fail(e)));
+      body.on('close', () => (size ? finish() : fail(new Blocked('unreachable'))));
+    });
+    const timer = setTimeout(() => req.destroy(new Blocked('unreachable')), left);
+    req.on('error', fail);
+    req.end();
+  });
+}
+
+export async function getText(url, accept, deadline, max = MAX_BYTES) {
   let current = new URL(url);
   for (let hop = 0; hop < 4; hop++) {
-    await assertPublic(current);
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), TIMEOUT);
-    let res;
-    try {
-      res = await fetch(current, { redirect: 'manual', signal: ctrl.signal,
-        headers: { 'User-Agent': UA, Accept: accept, 'Accept-Language': 'en-US,en;q=0.8' } });
-    } finally { clearTimeout(timer); }
-    if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
-      current = new URL(res.headers.get('location'), current);
+    assertPublic(current);
+    const res = await getOnce(current, accept, deadline, max);
+    if (res.location) {
+      try { current = new URL(res.location, current); } catch { throw new Blocked('unreachable'); }
       continue;
     }
-    const reader = res.body?.getReader();
-    const chunks = [];
-    let size = 0;
-    if (reader) {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        size += value.length;
-        chunks.push(value);
-        if (size > MAX_BYTES) { try { await reader.cancel(); } catch {} break; }
-      }
-    }
-    const text = new TextDecoder('utf-8', { fatal: false }).decode(Buffer.concat(chunks.map(c => Buffer.from(c))));
-    return { status: res.status, text, url: current.toString() };
+    return { status: res.status, text: res.text, url: current.toString() };
   }
   throw new Blocked('redirects');
+}
+
+// Where a link ends up, following its redirects without reading the pages (for short links).
+export async function whereTo(url, deadline) {
+  let current = new URL(url);
+  for (let hop = 0; hop < 5; hop++) {
+    assertPublic(current);
+    const res = await getOnce(current, '*/*', deadline, 1);
+    if (!res.location) return current.toString();
+    try { current = new URL(res.location, current); } catch { break; }
+  }
+  return current.toString();
 }
 
 // ---------------------------------------------------------------- robots.txt
@@ -93,7 +148,7 @@ async function getText(url, accept) {
 export function robotsAllows(robots, path) {
   const groups = [];
   let cur = null, lastWasAgent = false;
-  for (const raw of robots.split(/\r?\n/)) {
+  for (const raw of robots.slice(0, MAX_ROBOTS).split(/\r?\n/)) {
     const line = raw.replace(/#.*/, '').trim();
     const m = line.match(/^([A-Za-z-]+)\s*:\s*(.*)$/);
     if (!m) continue;
@@ -104,7 +159,7 @@ export function robotsAllows(robots, path) {
       lastWasAgent = true;
     } else {
       lastWasAgent = false;
-      if (cur && (key === 'allow' || key === 'disallow')) cur.rules.push({ allow: key === 'allow', path: val });
+      if (cur && (key === 'allow' || key === 'disallow')) cur.rules.push({ allow: key === 'allow', path: val.slice(0, 500) });
     }
   }
   const mine = groups.filter(g => g.agents.includes(AGENT.toLowerCase()));
@@ -112,17 +167,33 @@ export function robotsAllows(robots, path) {
   let best = null;
   for (const r of rules) {
     if (!r.path) continue;                       // "Disallow:" with nothing means allow all
-    const re = new RegExp('^' + r.path.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\\\$$/, '$'));
-    if (!re.test(path)) continue;
+    if (!robotsMatch(r.path, path)) continue;
     if (!best || r.path.length > best.path.length || (r.path.length === best.path.length && r.allow)) best = r;
   }
   return !best || best.allow;
 }
 
-async function checkRobots(url) {
+// Does one robots.txt rule cover this path? A rule matches from the start of the path; * is
+// any run of characters, and a $ at the very end means the path must end there. Built
+// without regular expressions, so a rule full of * cannot make the check run for ages.
+export function robotsMatch(rule, path) {
+  const ends = rule.endsWith('$');
+  const pat = ends ? rule.slice(0, -1) : rule + '*';
+  let p = 0, s = 0, star = -1, mark = 0;
+  while (s < path.length) {
+    if (p < pat.length && pat[p] === '*') { star = p++; mark = s; }
+    else if (p < pat.length && pat[p] === path[s]) { p++; s++; }
+    else if (star !== -1) { p = star + 1; s = ++mark; }
+    else return false;
+  }
+  while (p < pat.length && pat[p] === '*') p++;
+  return p === pat.length;
+}
+
+async function checkRobots(url, deadline) {
   const u = new URL(url);
   let r;
-  try { r = await getText(`${u.origin}/robots.txt`, 'text/plain'); }
+  try { r = await getText(`${u.origin}/robots.txt`, 'text/plain', deadline, MAX_ROBOTS); }
   catch (e) { if (e instanceof Blocked) throw e; throw new Blocked('unreachable'); }
   if (r.status >= 500) throw new Blocked('unreachable');     // treat a broken robots.txt as "no"
   if (r.status >= 400) return;                               // no robots.txt: allowed
@@ -241,8 +312,9 @@ export function guessFromUrl(raw) {
 
 // The whole lookup. Returns { title, image, price } or throws Blocked.
 export async function lookupProduct(url) {
-  await checkRobots(url);
-  const page = await getText(url, 'text/html,application/xhtml+xml');
+  const deadline = Date.now() + TIMEOUT;
+  await checkRobots(url, deadline);
+  const page = await getText(url, 'text/html,application/xhtml+xml', deadline);
   if (page.status === 401 || page.status === 403 || page.status === 429 || page.status === 503) throw new Blocked('refused');
   if (page.status >= 400) throw new Blocked('missing');
   // A robot check page is a "no", not something to get around.

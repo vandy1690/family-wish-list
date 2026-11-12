@@ -48,7 +48,7 @@ await page.getByRole('button', { name: 'Next' }).click();
 await h1('Anything to avoid?').waitFor();
 await page.getByLabel('Please avoid').fill('Peanuts');
 await page.getByRole('button', { name: 'Next' }).click();
-await h1('Add one thing you would like').waitFor();
+await h1('Add one gift you would like').waitFor();
 assert.ok(!/\bnull\b/.test(await page.locator('.wl-setup').innerText()), 'no "null" on the first-wish screen');
 await page.getByLabel('What would you like?').fill('Trekking poles');
 await page.getByRole('button', { name: 'Add it to my list' }).click();
@@ -278,9 +278,9 @@ for (const [width, height, most] of [[390, 664, 0.25], [320, 568, 0.32]]) {
   await p2.getByLabel('No, keep it a surprise for us too').check();
   await p2.getByRole('button', { name: 'Make the list' }).click();
   await h("Bea's list").waitFor();
-  await toast("Bea's list is ready. Tap Add an item");
+  await toast("Bea's list is ready. Use Add a gift");
   const head = await p2.locator('.wl-listhead').innerText();
-  assert.ok(head.includes('What is bought is hidden from you too') && head.includes('Kept by Jane and John'), 'hidden purchases, two keepers: ' + head);
+  assert.ok(head.includes('What is bought is hidden from you too') && head.includes('John keeps it too') && !head.includes('Kept by Jane'), 'hidden purchases, two keepers, and Jane is not told she keeps it: ' + head);
   step('Jane adds a list for Bea from My list (name, John as the other parent, purchases hidden) and lands on it');
 
   await p2.goBack();
@@ -288,7 +288,7 @@ for (const [width, height, most] of [[390, 664, 0.25], [320, 568, 0.32]]) {
   assert.equal(await p2.locator('.wl-kids a', { hasText: "Bea's list" }).count(), 1, "Bea's list is linked from My list");
   await p2.locator('.wl-kids a', { hasText: "Bea's list" }).click();
   await h("Bea's list").waitFor();
-  await p2.getByRole('button', { name: 'Add an item' }).click();
+  await p2.getByRole('button', { name: 'Add a gift' }).click();
   await p2.getByLabel('What is it?').fill('Puzzle');
   await p2.getByRole('button', { name: 'Add to the list' }).click();
   await toast("Added to Bea's list.");
@@ -315,7 +315,7 @@ for (const [width, height, most] of [[390, 664, 0.25], [320, 568, 0.32]]) {
   await p2.locator('.wl-kids a', { hasText: "Bea's list" }).click();
   await h("Bea's list").waitFor();
   await p2.getByRole('button', { name: 'Remove this list' }).click();
-  assert.ok((await p2.locator('#kp-q').innerText()).includes('The 1 thing on it go too'), 'says what goes');
+  assert.ok((await p2.locator('#kp-q').innerText()).includes('The 1 gift on it goes too'), 'says what goes');
   await p2.getByRole('button', { name: 'No, keep it' }).click();
   await h("Bea's list").waitFor();
   await p2.getByRole('button', { name: 'Remove this list' }).click();

@@ -35,6 +35,7 @@
     kidForm: null,         // a parent's form for a child's list: { id?, original, values, nameError }
     kidPanel: null,        // confirm removing a child's list: { id }
     share: null,           // who can see a list, being changed: { personId, mode: 'all'|'some', ids, kidsToo }
+    send: null,            // sending a link to a list by text or email: { personId }
     drawForm: null,        // a name draw being started or changed: { id?, values, nameError }
     drawPanel: null,       // a confirm on Draw names: { id, kind: 'redraw'|'remove' }
     email: '',
@@ -53,6 +54,8 @@
       for (const [k, v] of Object.entries(props)) {
         if (v === null || v === undefined || v === false) continue;
         if (k === 'class') n.className = v;
+        // Through the style object, not an attribute, so the security policy needs no inline styles.
+        else if (k === 'style') n.style.cssText = String(v);
         else if (k.startsWith('on') && typeof v === 'function') n.addEventListener(k.slice(2), v);
         else if (v === true) n.setAttribute(k, '');
         else n.setAttribute(k, String(v));
@@ -126,6 +129,8 @@
       return;
     }
     const t = $('toast'), s = $('status');
+    // OK on the message bar puts focus back where it was when the message appeared.
+    if (text) S.toastFrom = focusKey() || S.toastFrom;
     s.setAttribute('aria-live', tone === 'error' ? 'assertive' : 'polite');
     s.textContent = text || '';
     $('toastText').textContent = text || '';
@@ -152,7 +157,13 @@
     const r = await api('/data', body);
     if (r.status === 401) { S.data = null; draw(); say(r.data.message || 'You are signed out.', 'error'); return null; }
     if (r.data && Array.isArray(r.data.people)) S.data = r.data;
-    if (!r.ok) { say(r.data.message || 'That did not save. Try again.', 'error'); draw(); return null; }
+    if (!r.ok) {
+      S.lastError = r.data.message || 'That did not save. Try again.';
+      say(S.lastError, 'error');
+      draw();
+      return null;
+    }
+    S.lastError = null;
     if (after) after(r.data);
     draw();
     if (okText) say(okText, 'success');
@@ -165,13 +176,14 @@
     if (!r.ok) { if (!quiet) say(r.data.message || 'The lists did not load. Try again.', 'error'); if (!S.data) drawSignedOut(); return; }
     const first = !S.data;
     S.data = r.data;
+    S.hadSession = true;
     if (first) startView();
     draw();
   }
 
   // Someone else's change shows up within a minute, unless a form is open.
   const busy = () => S.form || S.panel || S.about || S.personForm || S.personPanel || S.kidForm || S.kidPanel ||
-    S.share || S.drawForm || S.drawPanel ||
+    S.share || S.send || S.drawForm || S.drawPanel ||
     (document.activeElement && document.activeElement.closest && document.activeElement.closest('form'));
   setInterval(() => { if (S.data && document.visibilityState === 'visible' && !busy()) load(true); }, 60_000);
   document.addEventListener('visibilitychange', () => {
@@ -199,14 +211,15 @@
 
   function closeAll() {
     S.form = null; S.panel = null; S.about = null; S.personForm = null; S.personPanel = null; S.kidForm = null; S.kidPanel = null;
-    S.share = null; S.drawForm = null; S.drawPanel = null;
+    S.share = null; S.send = null; S.drawForm = null; S.drawPanel = null;
   }
   const layerOpen = () => Boolean(S.form || S.panel || S.about || S.personForm || S.personPanel || S.kidForm || S.kidPanel
-    || S.share || S.drawForm || S.drawPanel);
+    || S.share || S.send || S.drawForm || S.drawPanel);
 
   // Forms and confirm steps get their own entry in the browser history, so the Back button
   // closes them instead of leaving the page. `back` is where focus goes when they close.
   function openLayer(name, apply, back) {
+    if (S.data) say('');
     apply();
     S.returnFocus = back || null;
     const url = location.pathname + location.search + '#' + name;
@@ -244,6 +257,22 @@
     go(a.getAttribute('href'));
   });
   window.addEventListener('popstate', () => {
+    // Back or Forward during the tour ends it, so a tip never points at a page that is gone.
+    if (S.tourStep !== null) { endTour('skipped'); return; }
+    // First-run setup keeps one history entry per step, so Back goes to the step before.
+    const st = history.state;
+    if (st && typeof st.setup === 'number' && S.data && needsSetup()) {
+      S.view = 'setup';
+      S.setupIdx = Math.min(st.setup, setupSteps().length - 1);
+      S.focus = '#pageH';
+      say('');
+      draw();
+      api('/data', { op: 'saveSetup', step: S.setupIdx });
+      window.scrollTo({ top: 0, behavior: 'instant' });
+      return;
+    }
+    // Forward into a form that was closed: the form is gone, so drop the #name from the address.
+    if (st && st.layer && !S.closing && !layerOpen()) history.replaceState(null, '', location.pathname + location.search);
     const wasLayer = S.closing || layerOpen();
     S.closing = false;
     closeAll();
@@ -286,6 +315,7 @@
     if (signin === 'expired') say('That sign-in link has run out or was replaced by a newer one. Type your email to get a new code.', 'error');
     if (signin === 'error' || signin === 'off') say('Sign-in is having trouble right now. Try again in a few minutes.', 'error');
     if (signin === 'ok') say('You are signed in.', 'success');
+    if (signin === 'out') say('You are signed out on this device.', 'success');
     // Keep only the parts of the address that say which page this is.
     const keep = new URLSearchParams();
     for (const k of ['item', 'view', 'list']) if (q.get(k)) keep.set(k, q.get(k));
@@ -296,7 +326,6 @@
   function startView() {
     readRoute();
     if (S.view === 'people' && !me().admin) { S.view = 'lists'; history.replaceState(null, '', urlFor()); }
-    if (S.view === 'lists' && !person(S.personId)) S.personId = me().id;
     const pending = store.get('wl-pending-add');
     if (pending && Date.now() - (pending.at || 0) < 2 * 3600e3) {
       S.view = 'lists';
@@ -310,6 +339,7 @@
     } else if (needsSetup()) {
       S.view = 'setup';
       S.setupIdx = Math.min((me().setup && me().setup.step) || 0, setupSteps().length - 1);
+      history.replaceState({ setup: S.setupIdx }, '', location.pathname + location.search);
     }
     store.set('wl-pending-add', null);
   }
@@ -339,6 +369,8 @@
     $('whoName').textContent = me().name;
     applySite(S.data.site);
     drawMainNav();
+    $('foot').hidden = Boolean(me().admin);
+    $('footAsk').textContent = 'Questions? ';
     $('helpBtn').hidden = S.view === 'setup';
     const root = $('view');
     root.replaceChildren();
@@ -360,6 +392,8 @@
   }
 
   function drawSignedOut() {
+    $('foot').hidden = false;
+    $('footAsk').textContent = 'Questions, or trouble signing in? ';
     $('toast').hidden = true;
     $('status').textContent = '';
     $('view').hidden = true;
@@ -420,6 +454,51 @@
       el('span', null, label));
   }
 
+  // Takes a field's error away as soon as it is fixed, without redrawing the form under the cursor.
+  function clearError(input) {
+    const id = `${input.id}-err`;
+    const err = document.getElementById(id);
+    if (err) err.remove();
+    input.removeAttribute('aria-invalid');
+    const wrap = input.closest('.sdc-field');
+    if (wrap) wrap.classList.remove('sdc-field--invalid');
+    const rest = (input.getAttribute('aria-describedby') || '').split(' ').filter(x => x && x !== id).join(' ');
+    if (rest) input.setAttribute('aria-describedby', rest); else input.removeAttribute('aria-describedby');
+  }
+
+  // Whether a store link looks safe to open (the server's check, lib/lists/linkcheck.js).
+  // In the form it sits under Store link; on a gift's page it sits above the store button.
+  // It warns and never stops anyone: the words say what to watch out for.
+  function linkCheckBox(c, where) {
+    if (!c) return null;
+    const id = where === 'form' ? 'f-url-check' : null;
+    const goes = c.store ? `${c.store} (${c.site})` : c.site;
+    if (c.level === 'ok') return where === 'form' ? el('p', { class: 'wl-linkcheck wl-linkcheck--ok', id }, `Goes to ${goes}.`) : null;
+    return el('div', { class: `wl-linkcheck wl-linkcheck--${c.level}`, id },
+      el('p', { class: 'wl-linkcheck__title' }, c.level === 'danger' ? 'This link looks unsafe' : 'Check this link'),
+      el('p', null, `It goes to ${goes}.`),
+      c.notes.length ? el('ul', null, c.notes.map(n => el('li', null, n))) : null);
+  }
+  function dropCheck(input) {
+    const box = $('f-url-check');
+    if (box) box.remove();
+    const rest = (input.getAttribute('aria-describedby') || '').split(' ').filter(x => x && x !== 'f-url-check').join(' ');
+    if (rest) input.setAttribute('aria-describedby', rest); else input.removeAttribute('aria-describedby');
+  }
+
+  // "Changed after you bought it": what it said before, from the server's copy.
+  function wasText(was) {
+    if (!was) return '';
+    const parts = [];
+    if ('title' in was) parts.push(`it was called ${was.title}`);
+    if ('note' in was) parts.push(was.note ? `the notes said: ${was.note}` : 'there were no notes');
+    if ('priceCents' in was) parts.push(was.priceCents === null ? 'there was no price' : `the price was ${money(was.priceCents)}`);
+    if ('qty' in was) parts.push(`it wanted ${was.qty}`);
+    if (!parts.length) return '';
+    const text = joinNames(parts);
+    return `Before the change, ${text}.`;
+  }
+
   const btn = (label, onclick, primary, extra) =>
     el('button', { class: 'sdc-btn' + (primary ? ' sdc-btn--primary' : ''), type: 'button', onclick, ...(extra || {}) }, label);
   const tag = (tone, text) => el('span', { class: `wl-tag wl-tag--${tone}` }, text);
@@ -443,19 +522,24 @@
   }
 
   function drawLists(root) {
+    const missing = S.personId && !person(S.personId);
     const owner = person(S.personId) || person(me().id);
     S.personId = owner.id;
+    if (missing) {
+      history.replaceState(history.state, '', urlFor({ list: owner.id }));
+      say('That list is not shared with you, or it was removed. Here is your own list.', 'warning');
+    }
     const counts = {};
     for (const it of S.data.items) counts[it.ownerId] = (counts[it.ownerId] || 0) + 1;
     const everyone = orderedPeople();
     const label = p => (p.rel === 'own' ? 'My list' : p.name);
 
     // Names down the side on a computer; one simple menu on a phone.
-    const side = el('nav', { class: 'wl-side', 'aria-label': 'Whose list' },
+    const side = el('nav', { class: 'wl-side', id: 'wlNames', 'aria-label': 'Whose list' },
       el('h2', { class: 'sdc-subhead' }, 'Lists'),
       el('ul', null, everyone.map(p => el('li', null,
         navLink(urlFor({ list: p.id }), [el('span', null, label(p)),
-          el('span', { class: 'wl-side__count' }, String(counts[p.id] || 0), el('span', { class: 'sdc-u-sr-only' }, (counts[p.id] || 0) === 1 ? ' thing' : ' things'))],
+          el('span', { class: 'wl-side__count' }, String(counts[p.id] || 0), el('span', { class: 'sdc-u-sr-only' }, (counts[p.id] || 0) === 1 ? ' gift' : ' gifts'))],
           p.id === owner.id)))));
     // On a phone: choose a name, then tap Show list. Changing the menu alone never leaves the
     // page, because arrow keys change a closed menu on some computers (WCAG 3.2.2).
@@ -463,7 +547,7 @@
       // S.pick keeps a choice made but not yet shown, so a background refresh cannot undo it.
       selectField({ id: 'wl-person', label: 'Whose list', value: S.pick && person(S.pick) ? S.pick : owner.id,
         onchange: e => { S.pick = e.target.value; },
-        options: everyone.map(p => { const c = counts[p.id] || 0; return { value: p.id, label: `${label(p)}, ${c} ${c === 1 ? 'thing' : 'things'}` }; }),
+        options: everyone.map(p => { const c = counts[p.id] || 0; return { value: p.id, label: `${label(p)}, ${c} ${c === 1 ? 'gift' : 'gifts'}` }; }),
         addon: el('button', { class: 'sdc-btn', type: 'submit', id: 'wl-show' }, 'Show list') }));
 
     const rel = owner.rel;
@@ -471,11 +555,11 @@
       : rel === 'manage' ? `You keep this list for ${owner.name}. What is bought is hidden from you too.`
       : rel === 'parent' ? `You keep this list for ${owner.name}, and you can see what has been bought.`
       : `${owner.name} cannot see what is bought, or the secret ideas people add.`;
-    const addLabel = keeps(rel) ? 'Add an item' : 'Add a secret idea';
+    const addLabel = keeps(rel) ? 'Add a gift' : 'Add a secret idea';
 
     // A parent who keeps a child's list can change its details or remove it, right here.
     const keptKid = owner.kid && rel !== 'own' && keeps(rel);
-    const quiet = !S.kidForm && !S.kidPanel && !S.share;
+    const quiet = !S.kidForm && !S.kidPanel && !S.share && !S.send;
     const shareLink = linkBtn(rel === 'own' ? 'Change who can see it' : 'Who can see it', () => openShare(owner), { id: 'shareEdit' });
     const kidLinks = keptKid && quiet ? el('div', { class: 'wl-actions wl-actions--links' },
       linkBtn('Edit details', () => openKidEdit(owner), { id: 'kidEdit' }), shareLink,
@@ -485,17 +569,27 @@
     const ownShare = rel === 'own' ? el('div', null, el('p', { class: 'wl-sub' }, sharedText(owner)),
       quiet ? el('div', { class: 'wl-actions wl-actions--links' }, shareLink) : null) : null;
 
+    // Sending the list by text or email: an installed app has no address bar to copy from.
+    const sendLinks = quiet ? el('div', { class: 'wl-actions wl-actions--links' },
+      linkBtn('Share by text or email', () => openSend(owner), { id: 'sendBtn' })) : null;
     const main = el('div', { class: 'wl-main' }, pick,
       el('header', { class: 'wl-listhead' },
         el('div', null, pageH(listName(owner)), el('p', { class: 'wl-sub' }, lede),
-          owner.keptBy ? el('p', { class: 'wl-sub' }, `Kept by ${owner.keptBy.join(' and ')}.`) : null,
-          keptKid ? el('p', { class: 'wl-sub' }, sharedText(owner)) : null, ownShare, kidLinks),
+          keptByLine(owner),
+          keptKid ? el('p', { class: 'wl-sub' }, sharedText(owner)) : null, ownShare, kidLinks, sendLinks),
         S.form && S.form.kind === 'add' ? null : btn(addLabel, () => openAdd(owner.id), true, { id: 'addBtn' })));
     // The side list comes after the list in the page, so a screen reader meets the heading first.
+    // On a computer it shows at the top left, so a keyboard user gets a quick way to it.
+    main.append(el('a', { class: 'sdc-btn wl-skip-names', href: '#wlNames', onclick: e => {
+      e.preventDefault();
+      const to = document.querySelector('.wl-side a[aria-current="page"]') || document.querySelector('.wl-side a');
+      if (to) to.focus();
+    } }, 'Skip to the names'));
 
     if (keptKid && S.kidForm && S.kidForm.id === owner.id) main.append(el('div', { class: 'wl-panel' }, kidForm()));
     if (keptKid && S.kidPanel && S.kidPanel.id === owner.id) main.append(kidRemovePanel(owner));
     if (S.share && S.share.personId === owner.id && (rel === 'own' || keptKid)) main.append(el('div', { class: 'wl-panel' }, shareForm(owner)));
+    if (S.send && S.send.personId === owner.id) main.append(el('div', { class: 'wl-panel' }, sendPanel(owner)));
     if (S.form && S.form.kind === 'add') main.append(el('div', { class: 'wl-panel' }, itemForm()));
     main.append(aboutCard(owner));
 
@@ -504,20 +598,28 @@
       main.append(el('div', { class: 'wl-empty' },
         el('p', null, rel === 'own' ? 'Your list is empty.' : 'Nothing on this list yet.'),
         el('p', null, rel === 'own'
-          ? 'Tap Add an item. A store link is optional, so homemade things like cookies or a knitted dog work too.'
-          : keeps(rel) ? 'Tap Add an item to put the first thing on it.'
+          ? 'Use Add a gift. A store link is optional, so homemade things like cookies or a knitted dog work too.'
+          : keeps(rel) ? 'Use Add a gift to put the first one on it.'
           : `You can still add a secret idea for ${owner.name}. Everyone but ${owner.name} will see it.`)));
     } else {
       const shown = filtered(all, rel);
       main.append(el('div', { class: 'wl-toolbar' }, sortField(rel),
         el('p', { class: 'wl-count', 'aria-live': 'polite' },
-          shown.length === all.length ? `${all.length} ${all.length === 1 ? 'thing' : 'things'}` : `Showing ${shown.length} of ${all.length}`)));
+          shown.length === all.length ? `${all.length} ${all.length === 1 ? 'gift' : 'gifts'}` : `Showing ${shown.length} of ${all.length}`)));
       if (shown.length) main.append(el('ul', { class: 'wl-grid', 'aria-label': listName(owner) }, shown.map(card)));
       else main.append(el('div', { class: 'wl-empty' }, el('p', null, 'Nothing matches. Choose "Newest first" in Sort to see everything.')));
     }
     if (rel === 'own') main.append(kidsPanel(), helpPanel());
     root.append(el('div', { class: 'wl-split' }, main, side));
     return listName(owner);
+  }
+
+  // Who keeps a kid's list, without telling a parent that they keep it twice.
+  function keptByLine(owner) {
+    if (!owner.keptBy) return null;
+    const others = owner.keptBy.filter(n => n !== me().name);
+    if (!keeps(owner.rel)) return el('p', { class: 'wl-sub' }, `Kept by ${joinNames(owner.keptBy)}.`);
+    return others.length ? el('p', { class: 'wl-sub' }, `${joinNames(others)} ${others.length === 1 ? 'keeps' : 'keep'} it too.`) : null;
   }
 
   // ------------------------------------------------------------ lists for children
@@ -564,7 +666,7 @@
       if (f.id) { closeLayer(); say('Saved.', 'success'); return; }
       // Open the new list in place of the form, so Back returns to My list.
       go(urlFor({ list: r.id }), true);
-      say(`${possessive(name)} list is ready. Tap Add an item to put the first thing on it.`, 'success');
+      say(`${possessive(name)} list is ready. Use Add a gift to put the first one on it.`, 'success');
     } },
     el('h2', { class: 'sdc-subhead', id: 'kidFormH' }, f.id ? `Edit ${possessive(f.original)} list` : 'Add a list for your child'),
     el('div', { class: 'wl-fields' },
@@ -573,7 +675,7 @@
         oninput: e => { v.name = e.target.value; } }),
       selectField({ id: 'kf-other', label: 'Other parent (optional)', value: v.other,
         options: [{ value: '', label: 'Just me' }, ...grownUps.map(p => ({ value: p.id, label: p.name }))],
-        hint: 'They can add and change things on this list too.', onchange: e => { v.other = e.target.value; } })),
+        hint: 'They can add and change gifts on this list too.', onchange: e => { v.other = e.target.value; } })),
     el('fieldset', { class: 'sdc-fieldset' },
       el('legend', null, 'Can the parents see what others buy for this child?'),
       el('div', { class: 'sdc-choice-set' },
@@ -587,7 +689,7 @@
   function kidRemovePanel(owner) {
     const n = S.data.items.filter(i => i.ownerId === owner.id).length;
     return el('div', { class: 'wl-confirm', role: 'group', 'aria-labelledby': 'kp-q' },
-      el('p', { id: 'kp-q' }, `Remove ${possessive(owner.name)} list? ${n ? `The ${n} ${n === 1 ? 'thing' : 'things'} on it go too, and anything people marked bought for ${owner.name}.` : 'It is empty.'} This cannot be undone.`),
+      el('p', { id: 'kp-q' }, `Remove ${possessive(owner.name)} list? ${n ? `The ${n} ${n === 1 ? 'gift on it goes' : 'gifts on it go'} too, and anything people marked bought for ${owner.name}.` : 'It is empty.'} This cannot be undone.`),
       btn(`Yes, remove ${possessive(owner.name)} list`, async () => {
         const name = owner.name;
         const ok = await change({ op: 'removeKid', id: owner.id });
@@ -607,9 +709,14 @@
     const yours = owner.rel === 'own';
     const whose = yours ? 'your list' : `${possessive(owner.name)} list`;
     if (!Array.isArray(owner.audience)) return `Everyone on the wish list can see ${whose}.`;
-    const names = owner.audience.map(id => S.data.members.find(m => m.id === id)).filter(Boolean).map(m => m.name);
-    if (!names.length) return yours ? 'Only you can see your list.' : `Only ${possessive(owner.name)} parents can see ${whose}.`;
-    return `Only ${joinNames(names)} can see ${whose}${yours ? '' : `, besides ${possessive(owner.name)} parents`}.`;
+    const nameFor = m => (m.id === me().id ? 'you' : m.name);
+    const who = owner.audience.map(id => S.data.members.find(m => m.id === id)).filter(Boolean).map(nameFor);
+    // The admin always sees every list, so they are named too.
+    const admin = S.data.members.find(m => m.admin);
+    if (admin && admin.id !== owner.id && !owner.audience.includes(admin.id)) who.push(nameFor(admin));
+    const lead = yours ? ['you'] : owner.kid ? [`${possessive(owner.name)} parents`] : [owner.name];
+    const all = [...lead, ...who.filter(n => !lead.includes(n))];
+    return `Only ${joinNames(all)} can see ${whose}.`;
   }
 
   function openShare(owner) {
@@ -626,13 +733,20 @@
     const skip = new Set([me().id, owner.id, ...(owner.managers || [])]);
     const choices = S.data.members.filter(m => !skip.has(m.id) && !m.admin);   // the admin always sees every list
     const whose = yours ? 'your list' : `${possessive(owner.name)} list`;
-    const mode = m => () => { f.mode = m; S.focus = `input[name="sh-mode"][value="${m}"]`; draw(); };
+    const mode = m => () => { f.mode = m; f.error = null; S.focus = `input[name="sh-mode"][value="${m}"]`; draw(); };
     const notes = [yours ? null : `${possessive(owner.name)} parents always can.`,
-      me().admin ? null : `${S.data.adminName} can always see every list, to help.`,
+      me().admin ? null : `${S.data.site.adminName} can always see every list, to help.`,
       'Someone who draws this name in a name draw can see it too.'].filter(Boolean);
     return el('form', { class: 'wl-form', novalidate: true, 'aria-labelledby': 'shareH', onsubmit: async e => {
       e.preventDefault();
       const audience = f.mode === 'all' ? null : f.ids.filter(id => choices.some(m => m.id === id));
+      // Picking nobody hides the list from the whole family, which is almost never meant.
+      if (audience && !audience.length) {
+        f.error = `Pick at least one person, or choose Everyone on the wish list.`;
+        S.focus = 'input[name="sh-who"]';
+        draw();
+        return;
+      }
       const ok = await change({ op: 'saveAudience', personId: owner.id, audience, kidsToo: f.kidsToo });
       if (!ok) return;
       closeLayer();
@@ -644,17 +758,55 @@
       el('div', { class: 'sdc-choice-set' },
         choice({ name: 'sh-mode', value: 'all', label: 'Everyone on the wish list', checked: f.mode === 'all', onchange: mode('all') }),
         choice({ name: 'sh-mode', value: 'some', label: 'Only the people I pick', checked: f.mode === 'some', onchange: mode('some') }))),
-    f.mode === 'some' ? el('fieldset', { class: 'sdc-fieldset' },
+    f.mode === 'some' ? el('fieldset', { class: 'sdc-fieldset', 'aria-describedby': f.error ? 'sh-who-err' : null },
       el('legend', null, 'Pick who can see it'),
       choices.length ? el('div', { class: 'sdc-choice-set' }, choices.map(m => choice({ name: 'sh-who', value: m.id, label: m.name, radio: false,
-        checked: f.ids.includes(m.id), onchange: e => { f.ids = e.target.checked ? [...f.ids, m.id] : f.ids.filter(x => x !== m.id); } })))
-        : el('p', null, 'There is nobody else to pick yet.')) : null,
+        checked: f.ids.includes(m.id), onchange: e => {
+          f.ids = e.target.checked ? [...f.ids, m.id] : f.ids.filter(x => x !== m.id);
+          if (f.error && f.ids.length) { f.error = null; const x = $('sh-who-err'); if (x) x.remove(); }
+        } })))
+        : el('p', null, 'There is nobody else to pick yet.'),
+      f.error ? el('p', { class: 'sdc-field__error', id: 'sh-who-err' }, f.error) : null) : null,
     el('p', { class: 'wl-hint' }, notes.join(' ')),
     kids.length ? el('div', { class: 'sdc-choice-set' }, choice({ name: 'sh-kids', value: 'kids', radio: false, checked: f.kidsToo,
       label: `Use the same for ${joinNames(kids.map(listName))}`, onchange: e => { f.kidsToo = e.target.checked; } })) : null,
     el('div', { class: 'wl-actions' },
       el('button', { class: 'sdc-btn sdc-btn--primary', type: 'submit' }, 'Save'),
       btn('Cancel', closeLayer)));
+  }
+
+  // ------------------------------------------------------------ sending a list by text or email
+  // Two ways only, a text or an email, each with the link already written in. Someone using the
+  // installed app has no address bar, so this is how they pass a list along. There is no
+  // copy-the-link button on purpose. The link opens only for people on the wish list who can
+  // see that list; anyone else gets the sign-in page.
+
+  function openSend(owner) {
+    openLayer('send', () => { S.send = { personId: owner.id }; S.focus = '#sendText'; }, '#sendBtn');
+  }
+
+  function sendPanel(owner) {
+    const yours = owner.rel === 'own';
+    const whose = yours ? 'my wish list' : `${possessive(owner.name)} wish list`;
+    const title = (S.data.site && S.data.site.title) || 'Family Wish List';
+    const link = `${ORIGIN}/lists?list=${encodeURIComponent(owner.id)}`;
+    const line = `Here is ${whose} on the ${title}: ${link}`;
+    const how = 'Sign in with your email address. There is no password.';
+    const text = `sms:?&body=${encodeURIComponent(`${line}\n${how}`)}`;
+    const mail = `mailto:?subject=${encodeURIComponent(whose.charAt(0).toUpperCase() + whose.slice(1))}`
+      + `&body=${encodeURIComponent(`${line}\n\n${how} If it does not open, ask ${S.data.site.adminName} to add you.`)}`;
+    const limited = Array.isArray(owner.audience);
+    return el('section', { class: 'wl-form', 'aria-labelledby': 'sendH' },
+      el('h2', { class: 'sdc-subhead', id: 'sendH' }, 'Share by text or email'),
+      el('p', null, `Your phone or computer opens a new message with a link to ${whose}. You pick who it goes to.`),
+      el('p', { class: 'wl-hint' }, limited
+        ? `${yours ? 'Your' : possessive(owner.name)} list is shared with only some people, so the link opens only for them. Anyone else sees the sign-in page.`
+        : keeps(owner.rel) ? 'The link opens for anyone on the wish list after they sign in. Anyone else sees the sign-in page.'
+        : 'The link opens for people on the wish list who can see this list, after they sign in. Anyone else sees the sign-in page.'),
+      el('div', { class: 'wl-actions' },
+        el('a', { class: 'sdc-btn sdc-btn--primary', href: text, id: 'sendText' }, 'Send a text'),
+        el('a', { class: 'sdc-btn', href: mail, id: 'sendEmail' }, 'Send an email'),
+        btn('Done', closeLayer)));
   }
 
   // ------------------------------------------------------------ Draw names
@@ -685,6 +837,8 @@
     if (S.drawForm && S.drawForm.id === d.id) return el('section', { class: 'wl-panel' }, drawFormEl());
     const panel = S.drawPanel && S.drawPanel.id === d.id ? S.drawPanel.kind : null;
     const facts = [`Started by ${d.mine ? 'you' : d.organizer}`, `${d.participants.length} people`];
+    // Everyone in it can see that pairs are kept apart, and how many, though not which.
+    if (d.apartCount) facts.push(`${d.apartCount} ${d.apartCount === 1 ? 'pair' : 'pairs'} kept apart`);
     if (d.budget) facts.push(`Spending limit ${d.budget}`);
     if (d.giveBy) facts.push(`Give by ${longDay(d.giveBy)}`);
     const line = (label, m) => el('p', { class: 'wl-match' }, `${label} `,
@@ -704,7 +858,10 @@
     } else if (panel === 'remove') {
       actions = el('div', { class: 'wl-confirm', role: 'group', 'aria-labelledby': `dq-${d.id}` },
         el('p', { id: `dq-${d.id}` }, `Remove ${d.name}? The names drawn go with it.`),
-        btn('Yes, remove it', async () => { const ok = await change({ op: 'removeDraw', id: d.id }, `${d.name} was removed.`); if (ok) { S.drawPanel = null; S.focus = '#pageH'; draw(); } }, true, { id: 'dp-yes' }),
+        btn('Yes, remove it', async () => {
+          const ok = await change({ op: 'removeDraw', id: d.id }, `${d.name} was removed.`);
+          if (ok) { S.returnFocus = '#pageH'; closeLayer(); }
+        }, true, { id: 'dp-yes' }),
         btn('No, keep it', closeLayer));
     } else if (d.canManage) {
       const confirm = kind => () => openLayer(`draw-${kind}`, () => { S.drawPanel = { id: d.id, kind }; S.focus = '#dp-yes'; }, `#d${kind[0]}-${d.id}`);
@@ -716,7 +873,7 @@
           linkBtn('Remove this draw', confirm('remove'), { id: `dx-${d.id}` })));
     }
     return el('section', { class: 'wl-panel wl-draw', 'aria-labelledby': `dh-${d.id}` },
-      el('h2', { class: 'sdc-subhead', id: `dh-${d.id}` }, d.name),
+      el('h2', { class: 'sdc-subhead', id: `dh-${d.id}`, tabindex: '-1' }, d.name),
       el('p', { class: 'wl-row__meta' }, facts.join(' · ')),
       status,
       el('p', { class: 'wl-row__meta' }, `In it: ${joinNames(d.participants.map(p => p.name))}.`),
@@ -726,11 +883,12 @@
   async function drawNow(d, okText) {
     const ok = await change({ op: 'drawNames', id: d.id });
     if (!ok) return;
+    say(okText, 'success');
+    // From the Draw again confirm: close it the way Back would, so no extra history entry stays.
+    if (history.state && history.state.layer) { S.returnFocus = `#dh-${d.id}`; closeLayer(); return; }
     S.drawPanel = null;
     S.focus = `#dh-${d.id}`;
-    if (history.state && history.state.layer) history.replaceState(null, '', location.pathname + location.search);
     draw();
-    say(okText, 'success');
   }
 
   function openDrawForm(d) {
@@ -746,14 +904,17 @@
 
   function drawFormEl() {
     const f = S.drawForm, v = f.values;
-    const everyone = orderedPeople();
+    // Everyone whose list you can see, plus anyone already in this draw whose list is now kept from you.
+    const was = f.id ? ((S.data.draws.find(x => x.id === f.id) || {}).participants || []) : [];
+    const everyone = [...orderedPeople(), ...was.filter(p => !person(p.id)).map(p => ({ id: p.id, name: p.name, kid: p.kid, rel: 'shop' }))];
     const label = p => (p.id === me().id ? `${p.name} (you)` : p.kid ? `${p.name} (kid)` : p.name);
-    const nameOf = id => (person(id) || {}).name || 'Someone';
+    const nameOf = id => (everyone.find(p => p.id === id) || {}).name || 'Someone';
     const inDraw = everyone.filter(p => v.participants.includes(p.id));
     const pickOptions = [{ value: '', label: 'Pick a person' }, ...inDraw.map(p => ({ value: p.id, label: p.name }))];
     const toggle = p => e => {
       v.participants = e.target.checked ? [...v.participants, p.id] : v.participants.filter(x => x !== p.id);
       v.apart = v.apart.filter(([a, b]) => v.participants.includes(a) && v.participants.includes(b));
+      if (v.participants.length >= 3) f.whoError = null;
       S.focus = `input[name="df-who"][value="${p.id}"]`;
       draw();
     };
@@ -780,7 +941,8 @@
     f.drawn ? el('p', { class: 'wl-hint' }, 'Names are already drawn. Changing who is in it, or who is kept apart, means drawing again.') : null,
     el('div', { class: 'wl-fields' },
       field({ id: 'df-name', label: 'Name of the draw', value: v.name, required: true, error: f.nameError || null,
-        attrs: { maxlength: 60, autocomplete: 'off' }, hint: 'Like Christmas 2026, or Cousins on Mom\'s side.', oninput: e => { v.name = e.target.value; } }),
+        attrs: { maxlength: 60, autocomplete: 'off' }, hint: 'Like Christmas 2026, or Cousins on Mom\'s side.',
+        oninput: e => { v.name = e.target.value; if (f.nameError && v.name.trim()) { f.nameError = null; clearError(e.target); } } }),
       field({ id: 'df-budget', label: 'Spending limit (optional)', value: v.budget, attrs: { maxlength: 40, autocomplete: 'off' },
         hint: 'Like $30', oninput: e => { v.budget = e.target.value; } }),
       field({ id: 'df-giveby', label: 'Give gifts by (optional)', type: 'date', value: v.giveBy,
@@ -790,7 +952,8 @@
       el('div', { class: 'sdc-choice-set' }, everyone.map(p => choice({ name: 'df-who', value: p.id, label: label(p), radio: false,
         checked: v.participants.includes(p.id), onchange: toggle(p) }))),
       f.whoError ? el('p', { class: 'sdc-field__error', id: 'df-who-err' }, f.whoError) : null,
-      el('p', { class: 'sdc-fieldset__desc' }, 'Kids can be in it too. Their parents see who the kid drew, and shop for them.')),
+      el('p', { class: 'sdc-fieldset__desc' }, 'Kids can be in it too. Their parents see who the kid drew, and shop for them. '
+        + 'Someone who shares their list with only some people shows here only if they share it with you.')),
     el('fieldset', { class: 'sdc-fieldset' },
       el('legend', null, 'Keep apart (optional)'),
       el('p', { class: 'sdc-fieldset__desc' }, 'People who live together usually skip each other. Parents and their own kids, and two parents of the same kid, are kept apart already.'),
@@ -875,8 +1038,9 @@
   function statusTags(it, owner, onPage) {
     if (hides(it.rel)) return [];
     const tags = [];
-    if (it.secret) tags.push(tag('idea', it.addedBy === me().name ? 'Your secret idea' : `Secret idea from ${it.addedBy}`));
+    if (it.secret) tags.push(tag('idea', it.addedByMe ? 'Your secret idea' : `Secret idea from ${it.addedBy}`));
     for (const b of it.buys) {
+      if (onPage && b.mine) continue;          // the page says it in full: You marked 2 bought on Nov 6
       tags.push(tag('done', b.mine ? (it.qty > 1 ? `You bought ${b.qty}` : 'You bought this')
         : it.qty > 1 ? `${b.buyer} bought ${b.qty}` : `Bought by ${b.buyer}`));
     }
@@ -895,6 +1059,8 @@
     const tags = statusTags(it, owner);
     const limited = limitTag(it);
     if (limited) tags.push(limited);
+    if (it.linkCheck && it.linkCheck.level === 'danger') tags.push(tag('stop', 'Link looks unsafe'));
+    else if (it.linkCheck && it.linkCheck.level === 'caution') tags.push(tag('warn', 'Check the link'));
     const done = shopper && !it.removed && it.need === 0;
     return el('li', { class: 'wl-card' + (done ? ' wl-card--done' : '') }, art(it),
       el('div', { class: 'wl-card__body' },
@@ -910,10 +1076,16 @@
   function drawItem(root) {
     const it = itemById(S.itemId);
     if (!it) {
-      root.append(navLink(urlFor({ list: me().id }), '← Back to my list', false, { class: 'wl-back' }),
-        pageH('This is no longer on the list'),
-        el('p', { class: 'wl-sub' }, 'It may have been taken off, or already given.'));
-      return 'Not on the list';
+      const gave = S.data.shopping.buys.find(b => b.itemId === S.itemId && b.given);
+      const whose = gave && person(gave.ownerId);
+      root.append(whose
+        ? navLink(urlFor({ list: whose.id }), `← Back to ${possessive(whose.name)} list`, false, { class: 'wl-back' })
+        : navLink(urlFor({ list: me().id }), '← Back to my list', false, { class: 'wl-back' }),
+        pageH(gave ? 'You gave this' : 'This is no longer on the list'),
+        el('p', { class: 'wl-sub' }, gave
+          ? 'You marked it given, so it came off the list. It stays in My shopping.'
+          : 'It may have been taken off, or already given.'));
+      return gave ? 'You gave this' : 'Not on the list';
     }
     const owner = person(it.ownerId);
     const shopper = !hides(it.rel);
@@ -942,6 +1114,11 @@
       for (const b of it.buys) {
         body.append(el('p', { class: 'wl-detail__fact' }, `${b.mine ? 'You' : b.buyer} marked ${b.qty > 1 ? b.qty : 'it'} bought on ${day(b.at)}.`));
       }
+      const mineBuy = it.buys.find(b => b.mine);
+      if (mineBuy && mineBuy.changed && it.was) body.append(el('p', { class: 'wl-detail__fact' }, wasText(it.was)));
+      if (mineBuy && it.removed) {
+        body.append(el('p', { class: 'wl-detail__fact' }, 'Keep it for another time, or tap Undo if you return it.'));
+      }
       if (it.chips.length) body.append(chipBox(it, owner));
     }
     body.append(S.panel ? itemPanel(it, owner) : itemActions(it, owner, shopper));
@@ -955,8 +1132,10 @@
     const href = safeHref(it.url);
     const out = [];
     const open = (kind, from) => () => openLayer(kind, () => { S.panel = kind; S.focus = `#p-${kind}`; }, from);
-    const ext = (label, primary) => el('a', { class: 'sdc-btn' + (primary ? ' sdc-btn--primary' : ''), href, target: '_blank', rel: 'noopener noreferrer' },
+    const unsafe = it.linkCheck && it.linkCheck.level === 'danger';
+    const ext = (label, primary) => el('a', { class: 'sdc-btn' + (primary && !unsafe ? ' sdc-btn--primary' : ''), href, target: '_blank', rel: 'noopener noreferrer' },
       label, el('span', { class: 'sdc-u-sr-only' }, ' (opens in a new tab)'));
+    if (href) out.push(linkCheckBox(it.linkCheck, 'page'));
     if (shopper) {
       const mine = it.buys.find(b => b.mine);
       if (href && !it.removed && it.need > 0) {
@@ -968,7 +1147,8 @@
       }
       if (mine) {
         out.push(btn('It has been given', open('given', '#givenBtn'), false, { id: 'givenBtn' }));
-        out.push(btn('Undo, I did not buy it', () => change({ op: 'unbuy', buyId: mine.id }, 'Undone. It is back to not bought.').then(ok => { if (ok) { S.focus = '#pageH'; draw(); } })));
+        out.push(btn(mine.qty > 1 ? 'Undo, I did not buy them' : 'Undo, I did not buy it',
+          () => change({ op: 'unbuy', buyId: mine.id }, 'Undone. It is back to not bought.').then(ok => { if (ok) { S.focus = '#pageH'; draw(); } })));
       }
       if (!it.removed && it.need > 0) {
         out.push(btn(it.chips.some(c => c.mine) ? 'Change my amount' : 'Go in together', () => openLayer('chip', () => {
@@ -1070,7 +1250,7 @@
     openLayer('add', () => {
       S.panel = null;
       S.form = { kind: 'add', ownerId, values: { url: '', title: '', image: '', price: '', note: '', qty: '1', audienceMode: 'all', audience: [] } };
-      S.focus = '#f-title';
+      S.focus = '#f-url';
     }, '#addBtn');
   }
 
@@ -1081,8 +1261,8 @@
         url: it.url || '', title: it.title, image: it.image || '', note: it.note || '',
         price: it.priceCents === null || it.priceCents === undefined ? '' : String(it.priceCents / 100),
         qty: String(it.qty || 1), audienceMode: Array.isArray(it.audience) ? 'some' : 'all', audience: [...(it.audience || [])] },
-        secret: Boolean(it.secret) };
-      S.focus = '#f-title';
+        secret: Boolean(it.secret), check: it.linkCheck || null };
+      S.focus = '#f-url';
     }, '#editBtn');
   }
 
@@ -1156,23 +1336,33 @@
       // Only when something arrived from a store does "where should it go" need asking.
       isAdd && f.arrived ? selectField({ id: 'f-owner', label: 'Add to', options: targets(), value: f.ownerId,
         onchange: e => { f.ownerId = e.target.value; S.personId = e.target.value; history.replaceState(history.state, '', urlFor({ list: f.ownerId }) + location.hash); draw(); } }) : null,
-      field({ id: 'f-title', label: 'What is it?', value: v.title, required: true,
-        attrs: { maxlength: 200, autocomplete: 'off' }, error: f.error || null,
-        hint: 'For example: LEGO Batmobile, or Aunt Suzy\'s cinnamon rolls', oninput: set('title') }),
+      // The link comes first: pasting one fills in the rest where the store allows.
       field({ id: 'f-url', label: 'Store link (optional)', type: 'url', value: v.url, error: f.urlError || null,
-        attrs: { inputmode: 'url', autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false' },
+        attrs: { inputmode: 'url', autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false',
+          'aria-describedby': ['f-url-hint', f.urlError ? 'f-url-err' : null, f.check ? 'f-url-check' : null].filter(Boolean).join(' ') },
         hint: 'Paste a link and the details fill in where the store allows. Leave it empty for something homemade.',
-        oninput: set('url'),
+        oninput: e => {
+          set('url')(e);
+          if (f.urlError) { f.urlError = null; clearError(e.target); }
+          // The note about the old link no longer applies.
+          if (f.check) { f.check = null; dropCheck(e.target); }
+        },
         onchange: () => { if (/^\S+\.\S+/.test((v.url || '').trim()) && v.url.trim() !== f.looked) lookup(true); },
         addon: btn('Get details from the link', () => lookup(false), false, { id: 'f-lookup' }) }),
-      // How many and notes are always in view: they are what shoppers most need to know.
-      el('div', { class: 'wl-fields' },
-        field({ id: 'f-price', label: 'Price (optional)', value: v.price,
-          attrs: { inputmode: 'decimal', autocomplete: 'off', maxlength: 12 }, oninput: set('price') }),
-        selectField({ id: 'f-qty', label: 'How many', value: v.qty || '1',
-          options: Array.from({ length: 10 }, (_, i) => ({ value: String(i + 1), label: String(i + 1) })), onchange: set('qty') })),
+      linkCheckBox(f.check, 'form'),
+      field({ id: 'f-title', label: 'What is it?', value: v.title, required: true,
+        attrs: { maxlength: 200, autocomplete: 'off' }, error: f.error || null,
+        hint: 'For example: LEGO Batmobile, or Aunt Suzy\'s cinnamon rolls',
+        oninput: e => { set('title')(e); if (f.error && e.target.value.trim()) { f.error = null; clearError(e.target); } } }),
       field({ id: 'f-note', label: 'Notes (optional)', multiline: true, rows: 3, value: v.note,
         attrs: { maxlength: 400 }, hint: 'Size, color, or anything that helps, like: Size L, any color but pink.', oninput: set('note') }),
+      // How many and the price sit side by side under the notes.
+      el('div', { class: 'wl-fields' },
+        field({ id: 'f-price', label: 'Price (optional)', value: v.price, error: f.priceError || null,
+          attrs: { inputmode: 'decimal', autocomplete: 'off', maxlength: 12 },
+          oninput: e => { set('price')(e); if (f.priceError) { f.priceError = null; clearError(e.target); } } }),
+        selectField({ id: 'f-qty', label: 'How many', value: v.qty || '1',
+          options: Array.from({ length: 10 }, (_, i) => ({ value: String(i + 1), label: String(i + 1) })), onchange: set('qty') })),
       giftAudienceField(f, owner),
       el('details', { class: 'wl-more', open: more, ontoggle: e => { f.moreOpen = e.target.open; } },
         el('summary', null, src ? 'Photo' : 'Add a photo (optional)'),
@@ -1181,7 +1371,7 @@
             el('span', { class: 'sdc-field__label', id: 'f-photo-label' }, 'Photo'),
             el('div', { class: 'wl-photo' },
               el('div', { class: 'wl-photo__frame' }, src
-                ? el('img', { src, alt: 'The photo for this item', referrerpolicy: 'no-referrer' }) : 'No photo'),
+                ? el('img', { src, alt: 'The photo for this gift', referrerpolicy: 'no-referrer' }) : 'No photo'),
               el('input', { class: 'wl-file', type: 'file', id: 'f-file', accept: 'image/*', 'aria-labelledby': 'f-photo-label f-file-btn',
                 onchange: e => upload(e.target.files && e.target.files[0]) }),
               el('label', { class: 'sdc-btn', for: 'f-file', id: 'f-file-btn' }, src ? 'Change photo' : 'Choose a photo'),
@@ -1219,7 +1409,8 @@
     }
     f.error = v.title.trim() ? null : 'Say what it is.';
     f.urlError = linkProblem(v.url);
-    if (f.error || f.urlError) { S.focus = f.error ? '#f-title' : '#f-url'; draw(); return; }
+    f.priceError = (v.price || '').trim() && !/\d/.test(v.price) ? 'Type the price in numbers, like 25.' : null;
+    if (f.error || f.urlError || f.priceError) { S.focus = f.error ? '#f-title' : f.urlError ? '#f-url' : '#f-price'; draw(); return; }
     $('f-save').disabled = true;
     const owner = person(f.ownerId);
     const body = { url: v.url, title: v.title, image: v.image, price: v.price, note: v.note, qty: v.qty,
@@ -1246,6 +1437,10 @@
     if (b) b.disabled = true;
     const r = await api('/lookup', { url });
     if (!S.form) return;
+    S.form.check = r.data && r.data.check ? r.data.check : null;
+    const checkSays = !S.form.check || S.form.check.level === 'ok' ? ''
+      : S.form.check.level === 'danger' ? ' This link looks unsafe: read the note under Store link.' : ' Read the note under Store link before you add it.';
+    const tone = ok => (S.form.check && S.form.check.level === 'danger' ? 'error' : S.form.check && S.form.check.level === 'caution' ? 'warning' : ok);
     if (r.ok && r.data.ok) {
       const v = S.form.values;
       const typed = S.form.typed || {};
@@ -1258,13 +1453,13 @@
       take('image', /^https:\/\//.test(r.data.image || '') ? r.data.image : '');
       take('price', r.data.price);
       if (v.title) S.form.error = null;
-      say('Filled in what the store shares. Check it, then add it.', 'success');
+      say('Filled in what the store shares. Check it, then add it.' + checkSays, tone('success'));
     } else {
       // The store said no, but the name was read from the link itself.
       const g = r.data && r.data.guess;
       const v = S.form.values, typed = S.form.typed || {};
       if (g && g.title && !typed.title && (!auto || !v.title)) { v.title = g.title; S.form.error = null; }
-      say(r.data.message || 'That link could not be read. Type the details in.', g && g.title ? 'success' : 'warning');
+      say((r.data.message || 'That link could not be read. Type the details in.') + checkSays, tone(g && g.title ? 'success' : 'warning'));
     }
     S.focus = '#f-title';
     draw();
@@ -1356,6 +1551,9 @@
     const tags = [];
     if (b.removed && !b.given) tags.push(tag('stop', `${p ? p.name : 'They'} took this off the list`));
     if (b.changed && !b.given) tags.push(tag('warn', 'Changed after you bought it'));
+    const notes = [];
+    if (b.changed && !b.given && b.was) notes.push(wasText(b.was));
+    if (b.removed && !b.given) notes.push('Keep it for another time, or tap Undo on its page if you return it.');
     // A gift already given has left the list, so it has no page to open. Neither does one
     // whose list is no longer shared with you; you can still mark it given here.
     if (b.hidden && !b.given) tags.push(tag('idea', `${p ? p.name : 'They'} no longer shares this list with you`));
@@ -1364,6 +1562,7 @@
     return el('li', { class: 'wl-row' }, art(b),
       el('div', { class: 'wl-row__body' }, title, el('p', { class: 'wl-row__meta' }, bits.join(' · ')),
         tags.length ? el('p', { class: 'wl-tags' }, tags) : null,
+        notes.map(n => el('p', { class: 'wl-row__meta' }, n)),
         b.hidden && !b.given ? el('div', { class: 'wl-actions' }, btn('It has been given', async () => {
           const ok = await change({ op: 'given', buyId: b.id }, 'Marked given.'); if (ok) { S.focus = '#pageH'; draw(); } })) : null,
         b.given && b.manual ? el('div', { class: 'wl-actions' }, btn('Not given yet', async () => { const ok = await change({ op: 'ungiven', buyId: b.id }, 'Back to bought.'); if (ok) { S.focus = '#pageH'; draw(); } })) : null));
@@ -1397,8 +1596,16 @@
               S.personPanel = null;
               S.personForm = { values: { name: r.name, email: r.email, admin: false, managers: [], parentsSee: false } };
               S.focus = '#pf-name';
-            }, '#addPersonBtn'), true, { id: `ra-${r.id}` }),
-            linkBtn('Decline', () => change({ op: 'dismissRequest', id: r.id }, `Declined. Nothing is sent to ${r.name}.`), { id: `rd-${r.id}` }))))))));
+            }, `#ra-${r.id}`), true, { id: `ra-${r.id}` }),
+            linkBtn('Decline', () => openLayer('decline', () => { S.personPanel = { id: r.id, kind: 'decline' }; S.focus = '#rq-yes'; }, `#rd-${r.id}`),
+              { id: `rd-${r.id}` })),
+          S.personPanel && S.personPanel.id === r.id && S.personPanel.kind === 'decline' ? el('div', { class: 'wl-confirm', role: 'group', 'aria-labelledby': 'rq-q' },
+            el('p', { id: 'rq-q' }, `Decline ${possessive(r.name)} request? Nothing is sent to ${r.name}. They can ask again later.`),
+            btn('Yes, decline', async () => {
+              const ok = await change({ op: 'dismissRequest', id: r.id }, `Declined. Nothing is sent to ${r.name}.`);
+              if (ok) { S.returnFocus = '#pageH'; closeLayer(); }
+            }, true, { id: 'rq-yes' }),
+            btn('Cancel', closeLayer)) : null))))));
     }
 
     root.append(el('ul', { class: 'wl-rows' }, people.map(p => {
@@ -1495,17 +1702,29 @@
       const ok = await change({ op: 'savePerson', id: f.id, name, email: v.email, admin: v.admin, managers: v.managers, parentsSee: v.parentsSee },
         f.id ? 'Saved.' : `${name} was added.${v.email ? ' They can sign in with that email now.' : ''}`,
       );
-      if (ok) closeLayer();
+      if (ok) { closeLayer(); return; }
+      // The server's reason goes under the field it is about, not only in the message bar.
+      f.emailError = S.lastError;
+      S.focus = /parent/i.test(S.lastError || '') && !v.email.trim() ? 'input[name="pf-managers"]' : '#pf-email';
+      say('');
+      draw();
     } },
     el('h2', { class: 'sdc-subhead' }, f.id ? `Edit ${v.name}` : 'Add a person'),
     el('div', { class: 'wl-fields' },
       field({ id: 'pf-name', label: 'Name', value: v.name, required: true, error: f.nameError || null, attrs: { maxlength: 40, autocomplete: 'off' },
         hint: 'The name everyone sees, like Grandma or Aunt Suzy.', oninput: e => { v.name = e.target.value; } }),
-      field({ id: 'pf-email', label: 'Email', type: 'email', value: v.email,
+      field({ id: 'pf-email', label: 'Email', type: 'email', value: v.email, error: f.emailError || null,
         attrs: { autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false', inputmode: 'email', disabled: isMe ? true : null },
         hint: isMe ? 'Your own email cannot be changed here.' : 'Leave it empty for a kid who has no email.',
-        oninput: e => { v.email = e.target.value; } })),
-    el('fieldset', { class: 'sdc-fieldset' },
+        oninput: e => {
+          v.email = e.target.value;
+          if (f.emailError) { f.emailError = null; clearError(e.target); }
+          // A grown-up with an email gets the sign-in choice; a kid gets the parent choices.
+          const kid = !v.email.trim();
+          if ($('pf-kid')) $('pf-kid').hidden = !kid;
+          if ($('pf-adminWrap')) $('pf-adminWrap').hidden = kid;
+        } })),
+    el('fieldset', { class: 'sdc-fieldset', id: 'pf-kid', hidden: Boolean(v.email.trim()) },
       el('legend', null, 'For a kid: the parents who keep this list'),
       parents.length ? el('div', { class: 'sdc-choice-set' }, parents.map(p => choice({
         name: 'pf-managers', value: p.id, label: p.name, radio: false, checked: v.managers.includes(p.id),
@@ -1513,8 +1732,8 @@
       }))) : el('p', { class: 'sdc-fieldset__desc' }, 'Add the parents first.'),
       el('div', { class: 'sdc-choice-set' }, choice({ name: 'pf-see', value: 'see', radio: false, checked: v.parentsSee,
         label: 'Parents can see what was bought', onchange: e => { v.parentsSee = e.target.checked; } })),
-      el('p', { class: 'sdc-fieldset__desc' }, 'Only used when there is no email. Turn it on if the parents shop for the kid too, so they do not buy the same thing.')),
-    isMe ? null : el('div', { class: 'sdc-choice-set' }, choice({ name: 'pf-admin', value: 'admin', radio: false, checked: v.admin,
+      el('p', { class: 'sdc-fieldset__desc' }, 'Turn it on if the parents shop for the kid too, so they do not buy the same thing.')),
+    isMe ? null : el('div', { class: 'sdc-choice-set', id: 'pf-adminWrap', hidden: !v.email.trim() }, choice({ name: 'pf-admin', value: 'admin', radio: false, checked: v.admin,
       label: 'Can add and remove people', onchange: e => { v.admin = e.target.checked; } })),
     el('div', { class: 'wl-actions' },
       el('button', { class: 'sdc-btn sdc-btn--primary', type: 'submit' }, f.id ? 'Save' : 'Add person'),
@@ -1547,7 +1766,7 @@
   function deviceSteps(kind, idPrefix) {
     if (kind === 'computer') {
       return el('ol', null,
-        el('li', null, 'Show your bookmarks bar. Chrome: press Command Shift B. Safari: View, then Show Favorites Bar.'),
+        el('li', null, 'Show your bookmarks bar. Chrome on a Mac: press Command Shift B. Chrome on Windows: press Ctrl Shift B. Safari: View, then Show Favorites Bar.'),
         el('li', null, 'Drag this button onto the bar: ',
           el('a', { class: 'sdc-btn wl-bookmarklet', href: bookmarklet(), onclick: e => { e.preventDefault(); say('Drag the button to your bookmarks bar instead of clicking it.', 'warning'); } }, 'Add to Wish List')),
         el('li', null, 'Go to a product on any store\'s website and click Add to Wish List in the bar.'));
@@ -1648,6 +1867,10 @@
   async function setupMove(delta) {
     const steps = setupSteps();
     const key = steps[S.setupIdx];
+    say('');
+    S.setupErr = null;
+    // Back inside setup is the same as the browser's Back, when that step was reached by Next.
+    if (delta < 0 && history.state && history.state.setup === S.setupIdx && history.state.next) { history.back(); return; }
     // Typed something and tapped Next instead of Add? Save it rather than lose it.
     const val = id => ($(id) ? $(id).value.trim() : '');
     if (delta > 0 && key === 'first' && val('s-title')) {
@@ -1672,6 +1895,8 @@
     }
     S.setupIdx = Math.max(0, Math.min(steps.length - 1, S.setupIdx + delta));
     S.focus = '#pageH';
+    if (delta > 0) history.pushState({ setup: S.setupIdx, next: true }, '', location.pathname + location.search);
+    else history.replaceState({ setup: S.setupIdx }, '', location.pathname + location.search);
     await change({ op: 'saveSetup', step: S.setupIdx });
     window.scrollTo({ top: 0, behavior: 'instant' });
   }
@@ -1683,6 +1908,12 @@
     S.answers = null;
     go(urlFor({ list: me().id }), true);
     if (!done) say('Setup skipped. Tap How it works at the top any time for a quick tour.', 'success');
+  }
+
+  // Setup's small forms show their errors under the field, like every other form.
+  const setupErr = id => (S.setupErr && S.setupErr.id === id ? S.setupErr.text : null);
+  function dropSetupErr(input) {
+    if (S.setupErr && S.setupErr.id === input.id && input.value.trim()) { S.setupErr = null; clearError(input); }
   }
 
   function drawSetup(root) {
@@ -1736,15 +1967,16 @@
       const added = S.added;
       const t = { title: '', url: '', price: '' };
       const addOne = async () => {
-        if (!t.title.trim()) { say('Type what you would like first.', 'error'); $('s-title').focus(); return; }
+        if (!t.title.trim()) { S.setupErr = { id: 's-title', text: 'Type what you would like first.' }; S.focus = '#s-title'; draw(); return; }
         const ok = await change({ op: 'addItem', ownerId: me().id, title: t.title, url: t.url, price: t.price, qty: 1 },
           `Added ${t.title.trim()} to your list.`, () => { added.push(t.title.trim()); });
         if (ok) { S.focus = '#s-title'; draw(); }
       };
-      put(pageH('Add one thing you would like'),
+      put(pageH('Add one gift you would like'),
         el('p', { class: 'wl-setup__lede' }, 'Just a name is enough, like Grandma\'s cookies. A store link and a price are extras. You can add more and add photos later.'),
         el('form', { class: 'wl-panel wl-form', novalidate: true, onsubmit: e => { e.preventDefault(); addOne(); } },
-          field({ id: 's-title', label: 'What would you like?', attrs: { maxlength: 200, autocomplete: 'off' }, oninput: e => { t.title = e.target.value; } }),
+          field({ id: 's-title', label: 'What would you like?', attrs: { maxlength: 200, autocomplete: 'off' }, error: setupErr('s-title'),
+            oninput: e => { t.title = e.target.value; dropSetupErr(e.target); } }),
           el('div', { class: 'wl-fields' },
             field({ id: 's-url', label: 'Store link (optional)', type: 'url', attrs: { inputmode: 'url', autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false' },
               hint: 'Paste it from the store', oninput: e => { t.url = e.target.value; } }),
@@ -1758,7 +1990,7 @@
       const v = { name: '' };
       const addKid = async () => {
         const name = v.name.trim();
-        if (!name) { say('Type your child\'s name first.', 'error'); $('s-kid').focus(); return; }
+        if (!name) { S.setupErr = { id: 's-kid', text: 'Type your child\'s name first.' }; S.focus = '#s-kid'; draw(); return; }
         const ok = await change({ op: 'saveKid', name, managers: [], parentsSee: true }, `${possessive(name)} list is ready.`);
         if (ok) { S.focus = '#s-kid'; draw(); }
       };
@@ -1766,7 +1998,7 @@
         el('p', { class: 'wl-setup__lede' }, 'Have a child who does not have an email? Add their name, and you keep their list for them. No young kids? Tap Next.'),
         el('form', { class: 'wl-panel wl-form', novalidate: true, onsubmit: e => { e.preventDefault(); addKid(); } },
           field({ id: 's-kid', label: 'Child\'s name', attrs: { maxlength: 40, autocomplete: 'off' }, hint: 'Like Ella or Baby Max',
-            oninput: e => { v.name = e.target.value; } }),
+            error: setupErr('s-kid'), oninput: e => { v.name = e.target.value; dropSetupErr(e.target); } }),
           el('div', { class: 'wl-actions' }, el('button', { class: 'sdc-btn', type: 'submit' }, 'Add their list'))),
         mine.length ? el('div', null, el('p', { class: 'sdc-subhead' }, 'Lists you keep'), el('ul', null, mine.map(p => el('li', null, p.name)))) : null,
         el('p', { class: 'wl-hint' }, 'You will see what others buy for them, so nobody buys the same thing. To change that, or add the other parent, open their list and tap Edit details.'),
@@ -1774,25 +2006,32 @@
     } else if (key === 'device') {
       const kind = thisDevice();
       put(pageH('Add things straight from a store'),
-        el('p', { class: 'wl-setup__lede' }, `This step is for the ${kind === 'computer' ? 'computer' : kind === 'iphone' ? 'iPhone or iPad' : 'phone'} you are using now. Afterward, one tap on any store's product page brings its name, photo and price to your list.`),
+        el('p', { class: 'wl-setup__lede' }, `This step is for the ${kind === 'computer' ? 'computer' : kind === 'iphone' ? 'iPhone or iPad' : 'phone'} you are using now. Afterward, one tap on any store's product page brings its name, photo and price to your list. This step is optional: skip it if it feels like a lot, and type gifts in instead.`),
         el('div', { class: 'wl-panel wl-help' }, el('p', { class: 'sdc-subhead' }, DEVICE_NAMES[kind]), deviceSteps(kind, 'setup')),
         el('p', { class: 'wl-hint' }, 'Using another phone or computer later? The steps for every kind are on your list, under Add things from any store.'),
         form(null, next('Next')));
     } else if (key === 'family') {
       const others = S.data.people.filter(p => p.id !== me().id);
-      const v = { name: '', email: '' };
+      const v = S.setupFamily || (S.setupFamily = { name: '', email: '' });
       put(pageH('Who is in the family?'),
         el('p', { class: 'wl-setup__lede' }, 'Only people you add here can sign in. Add each person\'s name and email. You can add kids and make changes later on the People page.'),
         el('form', { class: 'wl-panel wl-form', novalidate: true, onsubmit: async e => {
           e.preventDefault();
-          if (!v.name.trim() || !v.email.trim()) { say('Add a name and an email.', 'error'); return; }
+          if (!v.name.trim() || !v.email.trim()) {
+            const id = v.name.trim() ? 'f-pemail' : 'f-pname';
+            S.setupErr = { id, text: id === 'f-pname' ? 'Add their name.' : 'Add the email they will sign in with.' };
+            S.focus = '#' + id;
+            draw();
+            return;
+          }
           const ok = await change({ op: 'savePerson', name: v.name, email: v.email }, `${v.name.trim()} was added.`);
-          if (ok) { S.focus = '#f-pname'; draw(); }
+          if (ok) { S.setupFamily = null; S.focus = '#f-pname'; draw(); }
         } },
           el('div', { class: 'wl-fields' },
-            field({ id: 'f-pname', label: 'Name', attrs: { maxlength: 40, autocomplete: 'off' }, hint: 'Like Grandma or Aunt Suzy', oninput: e => { v.name = e.target.value; } }),
-            field({ id: 'f-pemail', label: 'Email', type: 'email', attrs: { autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false', inputmode: 'email' },
-              hint: 'The address they will sign in with', oninput: e => { v.email = e.target.value; } })),
+            field({ id: 'f-pname', label: 'Name', value: v.name, attrs: { maxlength: 40, autocomplete: 'off' }, hint: 'Like Grandma or Aunt Suzy', error: setupErr('f-pname'),
+              oninput: e => { v.name = e.target.value; dropSetupErr(e.target); } }),
+            field({ id: 'f-pemail', label: 'Email', type: 'email', value: v.email, attrs: { autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false', inputmode: 'email' },
+              hint: 'The address they will sign in with', error: setupErr('f-pemail'), oninput: e => { v.email = e.target.value; dropSetupErr(e.target); } })),
           el('div', { class: 'wl-actions' }, el('button', { class: 'sdc-btn', type: 'submit' }, 'Add person'))),
         others.length ? el('div', null, el('p', { class: 'sdc-subhead' }, `${others.length} ${others.length === 1 ? 'person' : 'people'} so far`),
           el('ul', null, others.map(p => el('li', null, p.name + (p.email ? `, ${p.email}` : ', a kid'))))) : null,
@@ -1800,8 +2039,8 @@
     } else {
       put(pageH('You are all set'),
         el('ul', { class: 'wl-setup__points' },
-          el('li', null, 'To add more, open your list and tap Add an item.'),
-          el('li', null, 'To shop for someone, tap their name, tap a thing, then tap I bought this.'),
+          el('li', null, 'To add more, open your list and use Add a gift.'),
+          el('li', null, 'To shop for someone, tap their name, tap a gift, then tap I bought this.'),
           el('li', null, 'After a gift is opened, tap It has been given.'),
           el('li', null, 'You never see what anyone buys for you.')),
         el('div', { class: 'wl-setup__nav' }, back, btn('Go to my list', () => setupFinish('done'), true, { id: 'setupNext' })));
@@ -1832,16 +2071,16 @@
     const ui = name => name.replace(/ /g, '\u00a0');
     return [
       { route: myList, target: '#addBtn', title: 'Your list',
-        text: `Tap ${ui('Add an item')} to put things on it.` },
+        text: `Tap ${ui('Add a gift')} to put things on it.` },
       { route: myList, target: 'section[aria-labelledby="aboutH"]', title: 'About me',
         text: 'Tap Edit to add sizes and favorites.' },
       mine.length ? { route: myList, target: '.wl-grid .wl-card', title: 'Change something',
-        text: 'Tap a thing to change it or take it off.' } : null,
+        text: 'Tap a gift to change it or take it off.' } : null,
       { route: myList, target: sideOrPick, title: 'Everyone else',
         text: 'Pick a name to see their list.' },
       shopItem ? { route: urlFor({ list: shopItem.ownerId }), title: `${possessive(owner.name)} list`,
         target: () => { const a = document.querySelector(`.wl-card__link[href$="item=${shopItem.id}"]`); return a && a.closest('.wl-card'); },
-        text: 'Tap a thing to open it.' } : null,
+        text: 'Tap a gift to open it.' } : null,
       shopItem ? { route: urlFor({ item: shopItem.id }), target: '#buyBtn', title: 'I bought this',
         text: `Bought it? Tap ${ui('I bought this')}. ${owner.name} never sees it.` } : null,
       shopItem ? { route: urlFor({ item: shopItem.id }), target: '#chipBtn', title: 'Go in together',
@@ -2028,6 +2267,8 @@
     const r = await api('/login', { email: S.email || $('email').value.trim(), code });
     if (!r.ok) { say(''); fieldError('code', r.data.message || 'That code did not work.'); $('code').focus(); return; }
     say('');
+    // Someone else was signed in on this page earlier: start fresh, as after Sign out.
+    if (S.hadSession) { location.replace(location.pathname + location.search); return; }
     S.focus = '#pageH';
     await load();
   }
@@ -2037,6 +2278,8 @@
     $('emailForm').hidden = true;
     $('codeForm').hidden = true;
     $('requestForm').hidden = false;
+    $('signinH').textContent = 'Ask to join';
+    $('signinFine').hidden = true;
     for (const id of ['rq-name', 'rq-email', 'rq-note']) fieldError(id, '');
     if (!$('rq-email').value) $('rq-email').value = S.email || $('email').value.trim();
     say('');
@@ -2066,6 +2309,8 @@
     $('codeForm').hidden = true;
     $('requestForm').hidden = true;
     $('emailForm').hidden = false;
+    $('signinH').textContent = 'Sign in';
+    $('signinFine').hidden = false;
     $('code').value = '';
     fieldError('code', '');
     say('');
@@ -2078,13 +2323,10 @@
     const a = e.target.closest('[data-action]');
     if (!a) return;
     if (a.dataset.action === 'sign-out') {
+      // A fresh page, so nothing of this person (setup answers, forms, the tour) stays in
+      // memory for whoever signs in next on this device.
       await api('/logout', {});
-      S.data = null;
-      closeAll();
-      history.replaceState(null, '', '/lists');
-      draw();
-      showEmailStep();
-      say('You are signed out on this device.', 'success');
+      location.replace('/lists?signin=out');
     } else if (a.dataset.action === 'tour') {
       startTour();
     } else if (a.dataset.action === 'new-code') {
@@ -2092,7 +2334,10 @@
     } else if (a.dataset.action === 'change-email') {
       showEmailStep();
     } else if (a.dataset.action === 'toast-close') {
+      const back = S.toastFrom && document.querySelector(S.toastFrom);
       say('');
+      S.toastFrom = null;
+      (back || $('pageH') || $('main')).focus();
     } else if (a.dataset.action === 'ask-to-join') {
       showRequestStep();
     } else if (a.dataset.action === 'back-to-signin') {
@@ -2128,13 +2373,52 @@
     if (r.data.adobeKit && !document.querySelector('link[href*="use.typekit.net"]')) {
       document.head.append(el('link', { rel: 'stylesheet', href: `https://use.typekit.net/${r.data.adobeKit}.css` }));
     }
+    markDisplayFont();
   });
+
+  // Without the SDC display face (no Adobe Fonts project), headings fall back to Inter, which
+  // looks thin at the display weight. The class makes them heavy instead (lists.css).
+  function markDisplayFont() {
+    const root = document.documentElement;
+    const kit = document.querySelector('link[href*="use.typekit.net"]');
+    const none = () => root.classList.add('wl-no-display-font');
+    if (!kit || !document.fonts) { if (!kit) none(); return; }
+    const check = () => document.fonts.load('400 16px "nickel-gothic-variable"')
+      .then(list => root.classList.toggle('wl-no-display-font', !list.length), none);
+    if (kit.sheet) check();
+    else { kit.addEventListener('load', check); kit.addEventListener('error', none); }
+  }
 
   // Lets Android show "Wish List" in its share menu once the page is installed.
   if ('serviceWorker' in navigator && location.protocol === 'https:') {
     navigator.serviceWorker.register('/lists-sw.js', { scope: '/lists' }).catch(() => {});
   }
 
+  // The link in the sign-in email arrives as /lists#t=<token>. The page sends it back to
+  // finish signing in, so an email scanner that opens links ahead of time cannot use it up.
+  // Read before readArrival() tidies the address, which drops the #t= part.
+  const linkHash = location.hash.match(/^#t=([A-Za-z0-9_.%-]+)$/);
+  async function finishLink() {
+    const m = linkHash;
+    if (!m) return;
+    history.replaceState(null, '', location.pathname + location.search);
+    say('Signing you in…');
+    const r = await api('/verify', { t: decodeURIComponent(m[1]) });
+    if (r.ok) { S.justSignedIn = true; say(''); return; }
+    say(r.data.message || 'That sign-in link has run out. Type your email to get a new code.', 'error');
+  }
+
+  // Escape closes an open form or confirm step, the same as Cancel.
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape' || e.defaultPrevented || !S.data || !layerOpen()) return;
+    if (document.querySelector('dialog[open]')) return;
+    e.preventDefault();
+    closeLayer();
+  });
+
   readArrival();
-  load();
+  finishLink().then(async () => {
+    await load();
+    if (S.justSignedIn && S.data) { S.justSignedIn = false; say('You are signed in.', 'success'); }
+  });
 })();

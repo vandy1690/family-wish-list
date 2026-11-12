@@ -4,6 +4,7 @@ import { json, isSameSiteJson, readJson, BAD } from '../http.js';
 import { personForRequest } from '../auth.js';
 import { readState, updateState } from '../store.js';
 import { validate, apply, view, tidy, OpError } from '../rules.js';
+import { checkLink } from '../linkcheck.js';
 
 const SIGNED_OUT = { error: 'signed_out', message: 'You are signed out. Sign in again to see the lists.' };
 
@@ -24,6 +25,9 @@ export async function POST(request) {
   const body = await readJson(request);
   try {
     const op = validate(body);
+    // A new or changed store link is checked before saving (a few seconds at most), so everyone
+    // who later opens the gift is warned if it looks unsafe. Never blocks the save.
+    if ((op.op === 'addItem' || op.op === 'editItem') && op.url) op.linkCheck = await checkLink(op.url).catch(() => null);
     const { state, extra } = await updateState(s => {
       const me = personForRequest(request, s);
       if (!me) throw new OpError('signed_out', SIGNED_OUT.message, 401);

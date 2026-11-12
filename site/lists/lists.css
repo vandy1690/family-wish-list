@@ -435,3 +435,55 @@ body:has(.wl-toast:not([hidden])) { padding-bottom: calc(var(--sdc-space-3xl) + 
 
 /* Phones: four tabs (Lists, My shopping, Draw names, People) on one line. */
 @media (max-width: 480px) { .wl-nav { column-gap: var(--sdc-space-sm); } }
+
+/* ---------- November 2026 QA pass ----------
+   Text that was under 16px goes to body size: the eyebrow on the sign-in page, store names,
+   the tour's tip count, the empty photo box, and the names on My shopping thumbnails. */
+.wl-welcome__title .sdc-eyebrow, .wl-card__store, .wl-tour__count, .wl-photo__frame, .wl-row .wl-art__name { font-size: var(--sdc-text-body); }
+.wl-welcome__title .sdc-eyebrow { letter-spacing: 0.08em; }
+/* The name that stands in for a missing photo is read by eye, so it gets full contrast. */
+.wl-art--none { color: var(--sdc-text); }
+
+/* Every tap target at least 44px each way: text-link buttons, the main links, the wish list's
+   name in the bar, and the names in "You are giving to". */
+.wl-linkbtn { min-inline-size: var(--sdc-control-h); }
+.wl-nav a { min-inline-size: var(--sdc-control-h); }
+.wl-bar__name { display: inline-flex; align-items: center; min-block-size: var(--sdc-control-h); padding-block: 0; }
+.wl-match a { display: inline-flex; align-items: center; min-block-size: var(--sdc-control-h); }
+.wl-row .wl-actions .wl-linkbtn { margin-inline-start: var(--sdc-space-xs); }
+
+/* At 200% zoom (about 640px wide) two cards to a row get cramped: one per row reads better. */
+@media (max-width: 700px) { .wl-grid { grid-template-columns: minmax(0, 1fr); } }
+
+/* On a computer the names sit at the top left but come last in the page. This link, seen
+   only when it has keyboard focus, jumps to them. */
+.wl-skip-names { display: none; }
+@media (min-width: 900px) {
+  .wl-main { position: relative; }
+  .wl-skip-names { display: inline-flex; position: absolute; inset-block-start: 0; inset-inline-start: 0; z-index: 2;
+    clip-path: inset(50%); inline-size: 1px; block-size: 1px; overflow: hidden; white-space: nowrap; }
+  .wl-skip-names:focus { clip-path: none; inline-size: auto; block-size: auto; overflow: visible; }
+}
+
+/* The footer only shows when there is an address to write to. */
+.wl-foot[hidden], .wl-foot:has(#mailAdmin[hidden]) { display: none !important; }
+
+/* No Adobe Fonts project (the public version, out of the box): display text falls back to
+   Inter, heavy, so headings keep their weight. app.js sets the class after checking. */
+.wl-no-display-font .sdc-display, .wl-no-display-font .wl-bar__name, .wl-no-display-font .wl-art__name {
+  font-weight: 800; font-variation-settings: normal; letter-spacing: -0.02em; }
+
+/* ---------- link check (PROPOSED: .wl-linkcheck) ----------
+   Under Store link in the form, and above the store button on a gift's page. A tint ground
+   with --sdc-text on it and a status edge, the same contract as .wl-tag: the words carry the
+   meaning, so no tone depends on color alone. "ok" is a quiet line saying where the link goes. */
+.wl-linkcheck { margin: 0; color: var(--sdc-text); }
+.wl-linkcheck--ok { color: var(--sdc-text-mute); }
+.wl-linkcheck--caution, .wl-linkcheck--danger { display: grid; gap: var(--sdc-space-xs); padding: var(--sdc-space-sm) var(--sdc-space-md);
+  border-radius: var(--sdc-radius-sm); line-height: 1.45; }
+.wl-linkcheck--caution { background: var(--sdc-warning-tint); box-shadow: inset calc(var(--sdc-space-xs) / 2) 0 0 var(--sdc-warning); }
+.wl-linkcheck--danger { background: var(--sdc-error-tint); box-shadow: inset calc(var(--sdc-space-xs) / 2) 0 0 var(--sdc-error); }
+.wl-linkcheck p { margin: 0; }
+.wl-linkcheck__title { font-weight: 700; }
+.wl-linkcheck ul { margin: 0; padding-inline-start: var(--sdc-space-md); display: grid; gap: calc(var(--sdc-space-xs) / 2); }
+@media (forced-colors: active) { .wl-linkcheck--caution, .wl-linkcheck--danger { border: var(--sdc-control-border) solid CanvasText; } }

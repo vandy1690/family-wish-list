@@ -69,9 +69,39 @@ await jane.signIn(); await grandma.signIn();
   const l = await sam.call('/api/lists/login', { email: sam.email });
   const link = new URL(l.data.dev.link);
   const v = await sam.call(link.pathname + link.search);
-  ok(v.status === 303 && v.headers.get('location') === '/lists?signin=ok' && sam.cookie, 'link sign-in sets cookie');
+  const to = v.headers.get('location') || '';
+  ok(v.status === 303 && to.startsWith('/lists#t=') && !sam.cookie,
+    'opening the link only hands it to the page, so a mail scanner cannot use it up: ' + to.slice(0, 20));
+  const t = decodeURIComponent(to.slice('/lists#t='.length));
+  const p = await sam.call('/api/lists/verify', { t });
+  ok(p.status === 200 && sam.cookie, 'the page finishes signing in with the link');
+  const again = await new User('again').call('/api/lists/verify', { t });
+  ok(again.status === 401 && again.data.error === 'expired', 'a link works only once');
+  const reopened = await new User('again').call(link.pathname + link.search);
+  ok(reopened.headers.get('location') === '/lists?signin=expired', 'a used link says so when opened again');
   const bad = await new User('x').call('/api/lists/verify?t=garbage');
   ok(bad.status === 303 && bad.headers.get('location') === '/lists?signin=expired', 'bad link refused');
+  // Signing in with the code makes the emailed link stop working.
+  const g = new User('grandma@example.com');
+  const sentAgain = await g.call('/api/lists/login', { email: g.email });
+  const gl = new URL(sentAgain.data.dev.link);
+  await g.call('/api/lists/login', { email: g.email, code: sentAgain.data.dev.code });
+  const gv = await new User('x').call(gl.pathname + gl.search);
+  ok(gv.headers.get('location') === '/lists?signin=expired', 'once the code is used, the link from the same email is not');
+}
+
+// Small route checks: HEAD for uptime monitors, sign-out only from this site, photos need sign-in first.
+{
+  const h = await fetch(BASE + '/api/lists/health', { method: 'HEAD' });
+  ok(h.status === 200, 'HEAD on health answers 200');
+  const lo = await fetch(BASE + '/api/lists/logout', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: '{}' });
+  ok(lo.status === 400 && !lo.headers.get('set-cookie'), 'a form post from another site cannot sign anyone out');
+  const lo2 = await fetch(BASE + '/api/lists/logout', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://evil.example' }, body: '{}' });
+  ok(lo2.status === 400, 'nor can a script on another site');
+  const ph = await new User('x').call('/api/lists/photo', { data: 'not a photo' });
+  ok(ph.status === 401, 'a photo upload checks sign-in before reading the upload');
+  const hp = await new User('x').call('/api/lists/request', { name: 'Bot', email: 'bot@example.com', website: 'spam.example' });
+  ok(hp.status === 200 && /John will see your request/.test(hp.data.message), 'the hidden bot field gets the same answer as a person: ' + hp.data.message);
 }
 
 // Non-admin cannot change the roster.
@@ -172,6 +202,14 @@ r = await grandma.op({ op: 'given', buyId: gBuy.id });
 ok(r.status === 200, 'grandma marks given');
 r = await sam.data();
 ok(r.data.items.find(i => i.id === socks).qty === 1, 'sam now sees 1 sock wanted after 2 given');
+// Sam changes the socks while 2 are given. His form shows 1 wanted; saving it keeps 1 wanted.
+{
+  const before = (await sam.data()).data.items.find(i => i.id === socks);
+  r = await sam.op({ op: 'editItem', id: socks, title: before.title, url: before.url,
+    price: before.priceCents === null ? '' : String(before.priceCents / 100), note: before.note, qty: before.qty });
+  ok(r.status === 200 && r.data.items.find(i => i.id === socks).qty === 1, 'saving the form keeps 1 wanted, not 1 minus the 2 given');
+  ok((await john.data()).data.items.find(i => i.id === socks).qty === 1, 'shoppers still see 1 wanted');
+}
 r = await grandma.op({ op: 'unbuy', buyId: gBuy.id });
 ok(r.status === 409, 'cannot unbuy a given gift');
 r = await grandma.op({ op: 'ungiven', buyId: gBuy.id });
@@ -305,6 +343,12 @@ ok(r.status === 401, 'sam cookie no longer works');
     'grandma added as the other parent, jane stays, a child cannot keep a list, purchases now hidden');
   g = await grandma.data();
   ok(g.data.people.find(p => p.id === rosie).rel === 'manage', 'grandma now keeps Rosie\'s list too');
+  k = await kid(grandma, { id: rosie, name: 'Rosie', managers: [], parentsSee: false });
+  ok(k.status === 200 && k.data.people.find(p => p.id === rosie).managers.includes(ids.Jane),
+    'grandma, a second parent, cannot take Jane (who made the list) off it');
+  k = await john.op({ op: 'saveKid', id: rosie, name: 'Rosie', managers: [ids.Jane, ids.Grandma], parentsSee: false });
+  ok(k.status === 200 && !k.data.people.find(p => p.id === rosie).managers.includes(k.data.me.id),
+    'john changes Rosie\'s list without becoming one of her parents');
   k = await kid(jane, { id: rosie, name: 'Rosie', managers: [] });
   ok(k.data.people.find(p => p.id === rosie).managers.join() === ids.Jane, 'jane takes grandma off; she cannot take herself off');
 
@@ -377,6 +421,8 @@ const mary = new User('mary@example.com'), carlos = new User('carlos@example.com
   ok(r.status === 200, 'and she can still mark it given');
   r = await mary.op({ op: 'addItem', ownerId: ids.Lucy, title: 'Sneaky idea' });
   ok(r.status === 403, 'mary cannot add an idea to a list she cannot see');
+  r = await mary.op({ op: 'saveKid', name: 'lucy garcia', managers: [], parentsSee: true });
+  ok(r.status === 400 && !/Carlos|kept by|list for/.test(r.data.message), 'a name clash with a hidden list gives nothing away: ' + r.data.message);
   r = await mary.op({ op: 'buy', itemId: lucyPaint, qty: 1 });
   ok(r.status === 409 && !r.data.items.some(i => i.id === lucyPaint), 'nor buy from it; the answer gives nothing away');
   r = await mary.op({ op: 'chip', itemId: lucyPaint, amount: '5' });
@@ -440,6 +486,22 @@ const mary = new User('mary@example.com'), carlos = new User('carlos@example.com
   await jane.op({ op: 'removeItem', id: party }); await grandma.op({ op: 'removeItem', id: spa }); await carlos.op({ op: 'removeItem', id: helmet });
 }
 
+// A secret idea left behind by someone who was removed is not stuck: John can change it.
+{
+  r = await john.op({ op: 'savePerson', name: 'Cousin Pat', email: 'pat@example.com' });
+  const patId = r.data.id;
+  const pat = new User('pat@example.com'); await pat.signIn();
+  r = await pat.op({ op: 'addItem', ownerId: ids.Jane, title: 'Idea from Pat', qty: 1 });
+  const orphan = r.data.id;
+  ok(r.data.items.find(i => i.id === orphan).addedByMe === true, 'the page is told which ideas are mine, by id rather than by name');
+  ok((await grandma.data()).data.items.find(i => i.id === orphan).addedByMe === false, 'and which are not');
+  await john.op({ op: 'removePerson', id: patId });
+  ok((await john.data()).data.items.find(i => i.id === orphan).canEdit === true, 'john can change an idea whose author is gone');
+  ok((await grandma.data()).data.items.find(i => i.id === orphan).canEdit === false, 'nobody else can');
+  r = await john.op({ op: 'removeItem', id: orphan });
+  ok(r.status === 200 && !r.data.items.some(i => i.id === orphan), 'and john can remove it');
+}
+
 // Asking to join, from the sign-in page. John stays the gatekeeper.
 {
   const anon = new User('');
@@ -497,6 +559,7 @@ const mary = new User('mary@example.com'), carlos = new User('carlos@example.com
   let t = await mary.data();
   const td = t.data.draws.find(x => x.id === drawId);
   ok(td && !td.canManage && !('apart' in td), 'mary sees the draw but not its settings');
+  ok(td.apartCount === 1, 'but she does see how many pairs are kept apart');
 
   const collect = async () => {
     const match = {};
@@ -540,7 +603,21 @@ const mary = new User('mary@example.com'), carlos = new User('carlos@example.com
   ok(r.status === 400 && /John has nobody they can draw/.test(r.data.message), 'an impossible draw says who is stuck: ' + r.data.message);
   r = await john.op({ op: 'saveDraw', name: 'Too small', participants: [meId, ids.Jane] });
   ok(r.status === 400, 'a draw needs three people');
+  // The organizer cannot use Keep apart pairs to force a match.
+  r = await john.op({ op: 'saveDraw', name: 'Rigged', participants: [meId, ids.Jane, ids.Grandma, ids.Mary], apart: [[meId, ids.Jane], [meId, ids.Grandma]] });
+  const rig = r.data.id;
+  r = await john.op({ op: 'drawNames', id: rig });
+  ok(r.status === 400 && /John could only draw one person/.test(r.data.message), 'pairs that force a match are refused: ' + r.data.message);
+  await john.op({ op: 'removeDraw', id: rig });
+  // Changing a draw keeps people whose list is now hidden from the organizer.
+  await carlos.op({ op: 'saveAudience', personId: ids['Carlos Garcia'], audience: null });
+  r = await mary.op({ op: 'saveDraw', name: 'Cousins', participants: [ids.Mary, ids.Jane, ids.Grandma, ids['Carlos Garcia']] });
+  const cousins = r.data.id;
+  ok(r.data.draws.find(x => x.id === cousins).participants.length === 4, 'mary starts a draw of four while she can see Carlos');
   await carlos.op({ op: 'saveAudience', personId: ids['Carlos Garcia'], audience: [ids.Jane, ids.Grandma] });   // hidden from Mary again
+  r = await mary.op({ op: 'saveDraw', id: cousins, name: 'Cousins 2026', participants: [ids.Mary, ids.Jane, ids.Grandma, ids['Carlos Garcia']] });
+  ok(r.status === 200 && r.data.draws.find(x => x.id === cousins).participants.length === 4, 'renaming it keeps Carlos, though his list is now hidden from her');
+  await mary.op({ op: 'removeDraw', id: cousins });
   r = await mary.op({ op: 'saveDraw', name: 'Mary\'s', participants: [ids.Mary, ids.Jane, ids.Grandma, ids['Carlos Garcia']] });
   ok(r.status === 200 && r.data.draws.find(x => x.id === r.data.id).participants.length === 3, 'anyone can start a draw, among the lists they can see');
   r = await mary.op({ op: 'removeDraw', id: r.data.id });
@@ -621,6 +698,147 @@ const mary = new User('mary@example.com'), carlos = new User('carlos@example.com
     ['Team Beanie - Green', 'https://shop.example.com/x', 'Team Beanie - Green']
   ];
   for (const [t, u, want] of tidy) ok(meta.tidyTitle(t, u) === want, `tidy: ${t} -> ${meta.tidyTitle(t, u)}`);
+
+  // Store lookups never reach a private address, whichever way it is written.
+  const addrs = [['127.0.0.1', true], ['10.1.2.3', true], ['169.254.169.254', true], ['100.64.0.1', true], ['::1', true],
+    ['::ffff:127.0.0.1', true], ['::ffff:7f00:1', true], ['::7f00:1', true], ['64:ff9b::a00:1', true], ['2002:a00:1::', true],
+    ['fe80::1', true], ['fec0::1', true], ['fd00::1', true], ['8.8.8.8', false], ['2606:4700:4700::1111', false]];
+  for (const [ip, want] of addrs) ok(meta.privateIp(ip) === want, `private address check: ${ip}`);
+  // A robots.txt rule full of * cannot stall the lookup.
+  const t0 = Date.now();
+  meta.robotsAllows('User-agent: *\nDisallow: /' + '*a'.repeat(250) + 'b\n', '/' + 'a'.repeat(2000));
+  ok(Date.now() - t0 < 200, `a hostile robots.txt rule is checked quickly (${Date.now() - t0} ms)`);
+  ok(meta.robotsMatch('/*.pdf$', '/a/b.pdf') && !meta.robotsMatch('/*.pdf$', '/a/b.pdfx') && meta.robotsMatch('/a*c', '/abbbc/d'),
+    'robots wildcard rules');
+
+  // Name draws, checked against every possible way to match the names.
+  const mk = n => Array.from({ length: n }, (_, i) => ({ id: 'person' + i, name: 'P' + i, email: `p${i}@example.com`, managers: [] }));
+  let compared = 0;
+  for (let round = 0; round < 300; round++) {
+    const n = 3 + (round % 4);
+    const people = mk(n), ids2 = people.map(p => p.id);
+    const apart = [];
+    for (let a = 0; a < n; a++) for (let b = a + 1; b < n; b++) if (Math.random() < 0.3) apart.push([ids2[a], ids2[b]]);
+    const kept = new Set(apart.flatMap(([a, b]) => [a + b, b + a]));
+    const all = [];
+    const go = (i, used, cur) => {
+      if (i === n) { all.push({ ...cur }); return; }
+      for (const r2 of ids2) if (r2 !== ids2[i] && !used.has(r2) && !kept.has(ids2[i] + r2)) {
+        used.add(r2); cur[ids2[i]] = r2; go(i + 1, used, cur); used.delete(r2); delete cur[ids2[i]];
+      }
+    };
+    go(0, new Set(), {});
+    const state = { people, items: [], buys: [], chips: [], draws: [] };
+    let out = null, err = null;
+    try { out = rules.drawPairs(state, { participants: ids2, apart }); } catch (e) { err = e.message; }
+    const forced = all.length && ids2.some(g => new Set(all.map(m => m[g])).size < 2);
+    if (!all.length) ok(err && /cannot be drawn|nobody they can draw/.test(err), 'no way to match: refused');
+    else if (forced) ok(err && /could only draw one person/.test(err), 'a forced match is refused: ' + err);
+    else if (n > 3 && all.length === 2) ok(err && /only be matched two ways/.test(err), 'two ways only is refused: ' + err);
+    else ok(out && ids2.every(g => out[g] && out[g] !== g && !kept.has(g + out[g])) && new Set(Object.values(out)).size === n, 'a fair draw goes ahead');
+    compared++;
+  }
+  ok(compared === 300, 'draw rules compared on 300 groups');
+
+  // A kid's draw: every parent who keeps the kid's list must already see the person drawn.
+  {
+    const people = mk(5);
+    const kidP = { id: 'kidperson', name: 'Kid', email: '', managers: [people[0].id, people[1].id] };
+    people[2].audience = [people[0].id, people[3].id, people[4].id];   // hidden only from the kid's second parent
+    const state = { people: [...people, kidP], items: [], buys: [], chips: [], draws: [] };
+    const who = [kidP.id, people[2].id, people[3].id, people[4].id];
+    let seen = 0;
+    for (let i = 0; i < 40; i++) {
+      try { const out = rules.drawPairs(state, { participants: who, apart: [] }); if (out[kidP.id] === people[2].id) seen++; }
+      catch (e) { ok(false, 'this kid draw should go ahead: ' + e.message); }
+    }
+    ok(seen === 0, 'a kid never draws someone hidden from one of the kid\'s parents');
+  }
+
+  // Limits: the owner's own count never includes secret ideas, so it cannot reveal them.
+  {
+    const owner = { id: 'ownerperson', name: 'Owner', email: 'o@example.com', managers: [] };
+    const shopper = { id: 'shopperperson', name: 'Shopper', email: 's@example.com', managers: [] };
+    const state = { people: [owner, shopper], items: [], buys: [], chips: [], draws: [] };
+    for (let i = 0; i < rules.LIMITS.itemsPerList - 1; i++) state.items.push({ id: 'own' + i, ownerId: owner.id, addedBy: owner.id, secret: false, qty: 1 });
+    for (let i = 0; i < rules.LIMITS.ideasPerList; i++) state.items.push({ id: 'idea' + i, ownerId: owner.id, addedBy: shopper.id, secret: true, qty: 1 });
+    const add = (me) => rules.apply(state, rules.validate({ op: 'addItem', ownerId: owner.id, title: 'One more', qty: 1 }), me);
+    ok(typeof add(owner) === 'string', 'the owner can fill their list to the limit with 100 secret ideas on it');
+    let msg = '';
+    try { add(owner); } catch (e) { msg = e.message; }
+    ok(/This list is full/.test(msg), 'and the limit is the same as with none: ' + msg);
+    msg = '';
+    try { add(shopper); } catch (e) { msg = e.message; }
+    ok(/already 100 secret ideas/.test(msg), 'secret ideas have their own limit: ' + msg);
+  }
+}
+
+// Store links are checked for safety. The suite runs the instant checks only (no network).
+{
+  const lc = await import(pathToFileURL(SITE + '/lib/lists/linkcheck.js').href);
+  const cases = [
+    ['https://www.amazon.com/dp/B0EXAMPLE', 'ok', null],
+    ['https://www.rei.com/product/1', 'ok', null],
+    ['https://targetpractice.com/range', 'ok', null],
+    ['https://mind-the-gap.co.uk/shop', 'ok', null],
+    ['https://shop.example.co.uk/x', 'ok', null],
+    ['http://shop.example.com/x', 'caution', /not secure/],
+    ['https://amazon-deals.shop/x', 'caution', /Amazon in its name, but it goes to amazon-deals\.shop/],
+    ['https://bit.ly/abc', 'caution', /short link/],
+    ['https://cheap-gifts.top/x', 'caution', /end in \.top/],
+    ['https://amazom.com/x', 'danger', /almost the same as amazon\.com/],
+    ['https://wallmart.com/x', 'danger', /almost the same as walmart\.com/],
+    ['https://arnazon.com/x', 'danger', /almost the same as amazon\.com/],
+    ['https://www.amazon.com.account-verify.io/x', 'danger', /starts like amazon\.com, but it really goes to account-verify\.io/],
+    ['https://xn--mazon-3ve.com/', 'danger', /another alphabet/],
+    ['https://93.184.216.34/x', 'danger', /number instead of a website name/]
+  ];
+  for (const [u, level, says] of cases) {
+    const c = lc.localCheck(u);
+    ok(c.level === level && (!says || c.notes.some(n => says.test(n))), `link check ${u}: ${c.level} ${JSON.stringify(c.notes)}`);
+  }
+  ok(lc.siteOf('www.shop.example.co.uk') === 'example.co.uk' && lc.siteOf('www.amazon.com') === 'amazon.com', 'website names, country endings too');
+  ok(lc.localCheck('https://www.lego.com/x').store === 'LEGO', 'a big store is named when the link really goes there');
+
+  // Saved with the gift, and shown to everyone who sees it, the owner too.
+  r = await jane.op({ op: 'addItem', ownerId: ids.Jane, title: 'Cheap boots', url: 'https://amazom.com/boots', qty: 1 });
+  const boots = r.data.id;
+  const mine = r.data.items.find(i => i.id === boots);
+  ok(mine.linkCheck && mine.linkCheck.level === 'danger' && mine.linkCheck.site === 'amazom.com', 'the owner sees the warning on her own gift');
+  const theirs = (await grandma.data()).data.items.find(i => i.id === boots);
+  ok(theirs.linkCheck.level === 'danger' && theirs.linkCheck.notes.length === 1, 'so does a shopper, who is the one who would click it');
+  r = await jane.op({ op: 'editItem', id: boots, title: 'Boots', url: 'https://www.amazon.com/dp/B0BOOTS', qty: 1 });
+  ok(r.data.items.find(i => i.id === boots).linkCheck.level === 'ok', 'fixing the link clears the warning');
+  r = await jane.op({ op: 'editItem', id: boots, title: 'Boots', url: '', qty: 1 });
+  ok(r.data.items.find(i => i.id === boots).linkCheck === null, 'no link, no check');
+  await jane.op({ op: 'removeItem', id: boots });
+  // The lookup answers with the check too, whatever the store said.
+  const lk = await jane.call('/api/lists/lookup', { url: 'http://amazon-gift-deals.example.com/p/1' });
+  ok(lk.data.check && lk.data.check.level === 'caution' && lk.data.check.notes.length === 2, 'the lookup sends the check: ' + JSON.stringify(lk.data.check));
+}
+
+// A damaged data file stops every save instead of starting over from an empty list.
+{
+  const { mkdtemp, writeFile, readFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  const dir = await mkdtemp(path.join(tmpdir(), 'wl-damaged-'));
+  await writeFile(path.join(dir, 'state.json'), '{"people":[{"id":"abc"');
+  process.env.LISTS_LOCAL_DIR = dir;
+  delete process.env.VERCEL;
+  globalThis.WL_DEV = true;
+  const store = await import(pathToFileURL(SITE + '/lib/lists/store.js').href);
+  let failed = false;
+  try { await store.readState(); } catch { failed = true; }
+  ok(failed, 'reading a damaged file fails');
+  failed = false;
+  try { await store.updateState(st => { st.people.push({ id: 'new' }); }); } catch { failed = true; }
+  ok(failed && (await readFile(path.join(dir, 'state.json'), 'utf8')) === '{"people":[{"id":"abc"', 'and a save leaves the file as it was');
+  globalThis.WL_DEV = false;
+  const fresh = await import(pathToFileURL(SITE + '/lib/lists/store.js').href + '?nodev');
+  ok(fresh.storageConfigured() === Boolean(process.env.BLOB_READ_WRITE_TOKEN || process.env.BLOB_STORE_ID),
+    'outside the dev server, LISTS_LOCAL_DIR alone does nothing');
+  await rm(dir, { recursive: true, force: true });
 }
 
 console.log(`\nALL ${passed} CHECKS PASSED`);

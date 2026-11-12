@@ -6,3 +6,6 @@ node_modules/
 .DS_Store
 # Copies like "file 2.mjs" that iCloud Drive makes on a sync conflict
 * 2.*
+
+# Folder copies like "fonts 2" from the same iCloud conflicts
+* 2

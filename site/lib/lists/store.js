@@ -4,15 +4,17 @@
 // in between (ETag check). On a clash it reads again and retries.
 //
 // For local testing only: LISTS_LOCAL_DIR=<folder> keeps everything in plain files in
-// that folder instead. It is ignored on Vercel, so it can never point production at disk.
+// that folder instead. It works only inside dev/server.mjs (see dev.js), so it can never
+// point a real server at disk.
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { devMode } from './dev.js';
 
 const STATE = 'family-lists/state.json';
 const PHOTOS = 'family-lists/photos/';
 
-const localDir = () => (!process.env.VERCEL && process.env.LISTS_LOCAL_DIR) || null;
+const localDir = () => (devMode() && process.env.LISTS_LOCAL_DIR) || null;
 let blobModule = null;
 const blob = async () => (blobModule ||= await import('@vercel/blob'));
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -40,13 +42,19 @@ export function storageConfigured() {
 
 // ---------------------------------------------------------------- state
 
+// A file that is there but cannot be read stops everything with an error. Treating it as
+// empty would let the next save write an empty wish list over the family's real one.
+class Unreadable extends Error {}
+
 export async function readState() {
   const dir = localDir();
   if (dir) {
     let text = null;
     try { text = await fs.readFile(path.join(dir, 'state.json'), 'utf8'); } catch { text = null; }
     if (text === null) return { state: emptyState(), etag: null };
-    return { state: normalize(JSON.parse(text)), etag: createHash('sha1').update(text).digest('hex') };
+    let parsed;
+    try { parsed = JSON.parse(text); } catch { throw new Unreadable('state.json is not valid JSON'); }
+    return { state: normalize(parsed), etag: createHash('sha1').update(text).digest('hex') };
   }
   const { get, BlobNotFoundError } = await blob();
   let result;
@@ -56,10 +64,12 @@ export async function readState() {
     if (e instanceof BlobNotFoundError) return { state: emptyState(), etag: null };
     throw e;
   }
-  if (!result || result.statusCode !== 200 || !result.stream) return { state: emptyState(), etag: null };
+  if (!result) return { state: emptyState(), etag: null };          // no file yet: a new wish list
+  if (result.statusCode !== 200 || !result.stream) throw new Unreadable(`state read answered ${result.statusCode}`);
   const text = await new Response(result.stream).text();
-  let parsed = null;
-  try { parsed = JSON.parse(text); } catch { parsed = null; }
+  let parsed;
+  try { parsed = JSON.parse(text); } catch { throw new Unreadable('state.json is not valid JSON'); }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Unreadable('state.json is not an object');
   return { state: normalize(parsed), etag: strongEtag(result.blob.etag) };
 }
 

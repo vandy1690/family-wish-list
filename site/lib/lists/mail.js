@@ -8,10 +8,11 @@
 // Each message takes `site` (siteInfo in site.js) for the wish list's name and the admin's.
 //
 // For local testing only: LISTS_DEV_LINKS=1 skips the email and hands the link and code
-// back to the page. Ignored on Vercel.
+// back to the page. Works only inside dev/server.mjs (see dev.js).
 import { fromAddress } from './site.js';
+import { devMode } from './dev.js';
 
-export const devLinks = () => !process.env.VERCEL && process.env.LISTS_DEV_LINKS === '1';
+export const devLinks = () => devMode() && process.env.LISTS_DEV_LINKS === '1';
 export const mailConfigured = () => devLinks() || Boolean(process.env.RESEND_API_KEY);
 
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');

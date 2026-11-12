@@ -48,7 +48,7 @@ for (const w of [1280, 390]) {
   await p.goto(BASE + '/lists', { waitUntil: 'networkidle' });
   await p.waitForTimeout(300);
   if (await p.locator('.wl-tour[open]').count()) await p.keyboard.press('Escape');
-  await p.getByRole('button', { name: 'Add an item' }).click();
+  await p.getByRole('button', { name: 'Add a gift' }).click();
   await p.locator('details.wl-more').evaluate(d => { d.open = true; });
   await check(p, `add-form-${w}`);
   await p.goto(BASE + `/lists?item=${item.id}`, { waitUntil: 'networkidle' });

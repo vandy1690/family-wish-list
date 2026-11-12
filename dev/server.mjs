@@ -38,8 +38,12 @@ Object.assign(process.env, {
   LISTS_ORIGIN: `http://localhost:${PORT}`
 });
 delete process.env.VERCEL;
+// Turns on the test switches above (see site/lib/lists/dev.js). Only this file sets it.
+globalThis.WL_DEV = true;
 
 const MODE = process.env.WL_STYLES === 'lite' || !existsSync(CHROME) ? 'lite' : 'sdc';
+const LITE_HEADERS = Object.fromEntries(JSON.parse(await fs.readFile(path.join(SITE, 'vercel.json'), 'utf8'))
+  .headers.find(h => h.source === '/(.*)').headers.map(h => [h.key, h.value]));
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.css': 'text/css', '.js': 'text/javascript', '.svg': 'image/svg+xml',
   '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.webmanifest': 'application/manifest+json', '.json': 'application/json' };
@@ -96,7 +100,10 @@ http.createServer(async (req, res) => {
     if (!file) { res.writeHead(404).end('Not found'); return; }
     let body = await fs.readFile(file);
     if (MODE === 'sdc' && file === path.join(SITE, 'lists/index.html')) body = Buffer.from(await fillHead(body.toString('utf8')));
-    res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' });
+    // In lite mode the page gets the same headers Vercel sends (site/vercel.json), security
+    // policy included, so the tests run under it. The sdc head brings its own inline scripts.
+    res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store',
+      ...(MODE === 'lite' ? LITE_HEADERS : {}) });
     res.end(body);
   } catch (e) {
     console.error(e);

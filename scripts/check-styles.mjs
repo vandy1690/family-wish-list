@@ -30,7 +30,7 @@ async function server(mode) {
   const port = await freePort();
   const data = await mkdtemp(path.join(tmpdir(), 'wl-styles-'));
   const child = spawn(process.execPath, [path.join(ROOT, 'dev/server.mjs'), String(port), data],
-    { stdio: 'ignore', env: { ...process.env, WL_STYLES: mode } });
+    { stdio: 'ignore', env: { ...process.env, WL_STYLES: mode, LISTS_LINKCHECK_OFFLINE: '1' } });
   const base = `http://localhost:${port}`;
   for (let i = 0; i < 50; i++) { try { if ((await fetch(base + '/api/lists/health')).ok) break; } catch {} await new Promise(r => setTimeout(r, 100)); }
   return { base, stop: async () => { child.kill(); await rm(data, { recursive: true, force: true }); } };
@@ -84,6 +84,9 @@ try {
           if (signedIn) { const [k, v] = s.cookie.split('='); await ctx.addCookies([{ name: k, value: v, url: srv.base }]); }
           const page = await ctx.newPage();
           await page.goto(srv.base + url(s), { waitUntil: 'networkidle' });
+          // Without Nickel Gothic, lite sets headings in a heavy Inter on purpose (wl-no-display-font).
+          // That is the type face difference allowed above, so it is set aside before comparing.
+          await page.evaluate(() => document.documentElement.classList.remove('wl-no-display-font'));
           await page.waitForTimeout(300);
           styles.push(await page.evaluate(props => [...document.querySelectorAll('body *')]
             .filter(e => e.offsetParent || getComputedStyle(e).position === 'fixed')

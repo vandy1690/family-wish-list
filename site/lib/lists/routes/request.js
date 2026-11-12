@@ -1,8 +1,8 @@
 // POST { name, email, note } from the sign-in page: asks the admin to add this person.
 //
 // The admin stays the gatekeeper: a request only puts a name on their People page; nobody can
-// sign in until they are added. The answer is the same whether or not the address is already on the
-// list, so this cannot be used to find out who is.
+// sign in until they are added. The answer is the same, and takes about the same time, whether
+// or not the address is already on the list, so this cannot be used to find out who is.
 //
 // Guards against a stranger or a bot filling it: a hidden "website" field people never see
 // (anything in it is quietly dropped), at most LIMITS.requests waiting at once, one entry per
@@ -14,12 +14,21 @@ import { sendJoinRequest } from '../mail.js';
 import { siteInfo } from '../site.js';
 
 const MAIL_PER_DAY = 10;
+const MIN_REPLY = 1500;    // ms, as for sign-in
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 const sent = site => ({
   ok: true,
   message: `Thanks. ${site.adminName} will see your request. Once you are added, sign in here with that email.`
 });
 
 export async function POST(request) {
+  const started = Date.now();
+  const res = await answer(request);
+  if (res.status === 200) await sleep(Math.max(0, MIN_REPLY + Math.random() * 300 - (Date.now() - started)));
+  return res;
+}
+
+async function answer(request) {
   if (!storageConfigured()) return json({ error: 'not_configured', message: 'This is not set up yet.' }, 503);
   if (!isSameSiteJson(request)) return json(BAD, 400);
   const body = await readJson(request, 4096);
@@ -29,12 +38,12 @@ export async function POST(request) {
     if (e instanceof OpError) return json({ error: e.code, message: e.message }, e.status);
     throw e;
   }
-  if (typeof body.website === 'string' && body.website.trim()) return json(sent(siteInfo(null)));   // the hidden field: a bot
-
   const now = Date.now();
   try {
     const { state } = await readState();
     const site = siteInfo(state);
+    // The hidden field was filled, so this is a bot. It gets the same answer as everyone.
+    if (typeof body.website === 'string' && body.website.trim()) return json(sent(site));
     if (state.people.some(p => p.email === req.email)) return json(sent(site));       // already on the list
     const { extra } = await updateState(s => {
       s.requests = s.requests || [];

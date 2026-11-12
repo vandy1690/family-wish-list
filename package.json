@@ -11,7 +11,7 @@
   },
   "type": "module",
   "scripts": {
-    "dev": "node dev/server.mjs 4380",
+    "dev": "node dev/server.mjs",
     "test": "node tests/run.mjs",
     "test:screens": "node tests/run.mjs screens",
     "docs:screens": "DOCS=1 node tests/run.mjs screens",

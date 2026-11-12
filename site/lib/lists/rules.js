@@ -16,8 +16,9 @@
 // that never lets anyone new sign in; the parent keeps the list for them.
 import { randomUUID, randomInt } from 'node:crypto';
 import { siteInfo } from './site.js';
+import { localCheck, forPage } from './linkcheck.js';
 
-export const LIMITS = { people: 80, itemsPerList: 250, items: 5000, title: 200, note: 400, about: 600, name: 40, kidsPerParent: 12, draws: 30, requests: 25 };
+export const LIMITS = { people: 80, itemsPerList: 250, ideasPerList: 100, items: 5000, title: 200, note: 400, about: 600, name: 40, kidsPerParent: 12, draws: 30, requests: 25 };
 const ID_RE = /^[A-Za-z0-9_-]{6,40}$/;
 const EMAIL_RE = /^[^\s@]{1,64}@[^\s@.]+(\.[^\s@.]+)+$/;
 const DAY = 864e5;
@@ -108,6 +109,13 @@ export function relation(state, me, ownerId) {
 export const hidesPurchases = rel => rel === 'own' || rel === 'manage';
 const keepsList = rel => rel !== 'shop';
 
+// Who may change or remove a gift: whoever added a secret idea (or the admin, once that person
+// is gone, so it is not stuck), and the owner or a kid's parents for everything else.
+export function mayChangeItem(state, me, it) {
+  if (!it.secret) return keepsList(relation(state, me, it.ownerId));
+  return it.addedBy === me.id || Boolean(me.admin && !state.people.some(p => p.id === it.addedBy));
+}
+
 // ---------------------------------------------------------------- who can see a list
 // A person may limit who sees their list (`audience`: the grown-ups who may, or null for
 // everyone). Parents set it for a kid's list. Some people always see a list: its owner, the
@@ -141,6 +149,18 @@ export function canSee(state, me, ownerId, drawn = drawnFor(state, me)) {
   if ((owner.managers || []).includes(me.id)) return true;
   if (!Array.isArray(owner.audience) || owner.audience.includes(me.id)) return true;
   return drawn.has(ownerId);
+}
+
+// What a changed gift said before, field by field, for the people who already bought it.
+function wasOf(it, left) {
+  const b = it.before;
+  if (!b) return null;
+  const out = {};
+  if (b.title !== it.title) out.title = b.title;
+  if ((b.note || '') !== (it.note || '')) out.note = b.note || '';
+  if ((b.priceCents ?? null) !== (it.priceCents ?? null)) out.priceCents = b.priceCents ?? null;
+  if (b.qty !== left) out.qty = b.qty;
+  return Object.keys(out).length ? out : null;
 }
 
 function itemTotals(state, item, now) {
@@ -189,10 +209,13 @@ export function view(state, me, now = Date.now()) {
     if (!seesItem(state, me, it, drawn)) continue;
     const rel = relation(state, me, it.ownerId);
     const t = itemTotals(state, it, now);
-    const mayEdit = it.secret ? it.addedBy === me.id : keepsList(rel);
+    const mayEdit = mayChangeItem(state, me, it);
     const base = {
       id: it.id, ownerId: it.ownerId, title: it.title, url: it.url || '', store: it.store || '',
       image: it.image || '', priceCents: it.priceCents ?? null, note: it.note || '', createdAt: it.createdAt, rel,
+      // Whether the store link looks safe to open (lib/lists/linkcheck.js). Older gifts get the
+      // instant checks here; new and changed ones were looked up when saved.
+      linkCheck: it.url ? forPage(it.linkCheck || localCheck(it.url)) : null,
       // Everyone who sees a limited gift is told so; only whoever can change it sees the names.
       limited: Array.isArray(it.audience), ...(mayEdit && Array.isArray(it.audience) ? { audience: it.audience } : {})
     };
@@ -208,13 +231,14 @@ export function view(state, me, now = Date.now()) {
     items.push({
       ...base,
       qty: t.left, bought: t.openQty, need: t.need,
-      secret: Boolean(it.secret), addedBy: it.secret ? nameOf(it.addedBy) : '',
-      canEdit: it.secret ? it.addedBy === me.id : keepsList(rel),
+      secret: Boolean(it.secret), addedBy: it.secret ? nameOf(it.addedBy) : '', addedByMe: it.addedBy === me.id,
+      canEdit: mayEdit,
       removed: Boolean(it.removedAt),
       buys: t.open.map(b => ({
         id: b.id, buyer: nameOf(b.buyerId), mine: b.buyerId === me.id, qty: b.qty, at: b.at,
         changed: Boolean(it.editedAt && it.editedAt > b.at)
       })),
+      ...(t.open.some(b => it.editedAt && it.editedAt > b.at) && wasOf(it, t.left) ? { was: wasOf(it, t.left) } : {}),
       chips: state.chips.filter(c => c.itemId === it.id)
         .map(c => ({ id: c.id, person: nameOf(c.personId), mine: c.personId === me.id, cents: c.cents }))
     });
@@ -235,7 +259,8 @@ export function view(state, me, now = Date.now()) {
       title: it.title, url: it.url || '', store: it.store || '',
       image: it.image || '', priceCents: it.priceCents ?? null, qty: b.qty, at: b.at,
       given: Boolean(gAt), givenAt: gAt, manual: Boolean(b.givenAt),
-      removed: Boolean(it.removedAt), changed: Boolean(it.editedAt && it.editedAt > b.at)
+      removed: Boolean(it.removedAt), changed: Boolean(it.editedAt && it.editedAt > b.at),
+      ...(it.editedAt && it.editedAt > b.at && !gAt && wasOf(it, itemTotals(state, it, now).left) ? { was: wasOf(it, itemTotals(state, it, now).left) } : {})
     });
   }
   for (const c of state.chips) {
@@ -261,6 +286,8 @@ export function view(state, me, now = Date.now()) {
       budget: d.budget || '', giveBy: d.giveBy || '', createdAt: d.createdAt,
       drawnAt: d.pairs ? d.drawnAt : null, redraw: Boolean(d.redraw), inIt
     };
+    // Everyone in it sees how many pairs are kept apart; only the organizer sees which.
+    out.apartCount = (d.apart || []).length;
     if (out.canManage) out.apart = d.apart || [];
     if (d.pairs) {
       if (inIt && d.pairs[me.id]) out.myMatch = { id: d.pairs[me.id], name: nameOf(d.pairs[me.id]) };
@@ -296,7 +323,7 @@ export function cleanJoinRequest(body) {
 
 // ---------------------------------------------------------------- changes
 
-const NOT_FOUND = () => new OpError('not_found', 'That item is no longer on the list. The page now shows the latest.', 409);
+const NOT_FOUND = () => new OpError('not_found', 'That gift is no longer on the list. The page now shows the latest.', 409);
 
 // Check and trim a request body before touching storage.
 export function validate(body) {
@@ -430,16 +457,26 @@ const shuffled = list => {
 
 // Who may draw whom: never yourself, never a pair kept apart, never a parent and their own
 // kid, never two parents of the same kid (most likely partners), and only someone whose list
-// the giver can see (for a kid, the kid's parents shop, so they must be able to see it).
+// the giver can already see. For a kid, every parent who keeps the kid's list shops for that
+// match, so every one of them must already see the list: drawing a name never opens a list
+// to someone it was hidden from.
 // Then one random match each, so everyone gives once and gets once.
+//
+// A draw must also stay a secret from whoever set it up. The organizer picks the people and the
+// Keep apart pairs, so they could pick them to force one match. The draw is refused when any
+// giver could end up with only one person, and (above three people) when the names can only be
+// matched two ways, since then anyone could work out every match from their own.
 export function drawPairs(state, d) {
   const person = id => state.people.find(p => p.id === id);
   const keepers = id => person(id)?.managers || [];
   const partners = (a, b) => state.people.some(k => !k.email && (k.managers || []).includes(a) && (k.managers || []).includes(b));
   const apart = new Set((d.apart || []).flatMap(([a, b]) => [`${a}|${b}`, `${b}|${a}`]));
   const shoppers = id => { const p = person(id); return p.email ? [p] : keepers(id).map(person).filter(Boolean); };
-  const allowed = (g, r) => g !== r && !apart.has(`${g}|${r}`) && !keepers(g).includes(r) && !keepers(r).includes(g)
-    && !partners(g, r) && shoppers(g).some(v => canSee(state, v, r, new Set()));
+  const allowed = (g, r) => {
+    if (g === r || apart.has(`${g}|${r}`) || keepers(g).includes(r) || keepers(r).includes(g) || partners(g, r)) return false;
+    const who = shoppers(g);
+    return who.length > 0 && who.every(v => canSee(state, v, r, new Set()));
+  };
   const ids = d.participants.filter(id => person(id));
   if (ids.length < 3) throw new OpError('invalid', 'A draw needs at least three people.');
   const options = new Map(ids.map(g => [g, ids.filter(r => allowed(g, r))]));
@@ -465,7 +502,68 @@ export function drawPairs(state, d) {
     return false;
   };
   if (!place(0)) throw new OpError('invalid', 'These names cannot be drawn with these rules. Take out a Keep apart pair, or add more people.');
+  const room = matchRoom(ids, options, pairs);
+  const forced = ids.find(g => room.choices.get(g) < 2);
+  if (forced) {
+    throw new OpError('invalid', `With these rules, ${person(forced).name} could only draw one person, so the draw would not be `
+      + 'a secret. Take out a Keep apart pair, or add more people.');
+  }
+  if (ids.length > 3 && room.onlyTwo) {
+    throw new OpError('invalid', 'With these rules the names can only be matched two ways, so everyone could work out who drew whom. '
+      + 'Take out a Keep apart pair, or add more people.');
+  }
   return pairs;
+}
+
+// How much room a draw has, worked out from one full match (`pairs`) instead of trying them
+// all. Picture an arrow from each giver to every person they may draw but did not, and an
+// arrow from each person drawn back to the giver who drew them. A giver could have drawn
+// someone else exactly when that arrow sits on a loop. Each loop is another full match, so
+// a single loop and nothing more means only two ways to match the names.
+export function matchRoom(ids, options, pairs) {
+  const n = ids.length;
+  const at = new Map(ids.map((id, i) => [id, i]));
+  const out = Array.from({ length: 2 * n }, () => []);          // 0..n-1 givers, n..2n-1 people drawn
+  ids.forEach((g, i) => {
+    for (const r of options.get(g)) if (r !== pairs[g]) out[i].push(n + at.get(r));
+    out[n + at.get(pairs[g])].push(i);
+  });
+  // Tarjan's strongly connected parts, without recursion.
+  const index = new Array(2 * n).fill(-1), low = new Array(2 * n).fill(0), part = new Array(2 * n).fill(-1);
+  const onStack = new Array(2 * n).fill(false), stack = [];
+  let next = 0, parts = 0;
+  for (let start = 0; start < 2 * n; start++) {
+    if (index[start] !== -1) continue;
+    const work = [[start, 0]];
+    index[start] = low[start] = next++; stack.push(start); onStack[start] = true;
+    while (work.length) {
+      const top = work[work.length - 1];
+      const [v, k] = top;
+      if (k < out[v].length) {
+        top[1]++;
+        const w = out[v][k];
+        if (index[w] === -1) {
+          index[w] = low[w] = next++; stack.push(w); onStack[w] = true; work.push([w, 0]);
+        } else if (onStack[w]) low[v] = Math.min(low[v], index[w]);
+        continue;
+      }
+      work.pop();
+      if (work.length) { const u = work[work.length - 1][0]; low[u] = Math.min(low[u], low[v]); }
+      if (low[v] === index[v]) {
+        let w;
+        do { w = stack.pop(); onStack[w] = false; part[w] = parts; } while (w !== v);
+        parts++;
+      }
+    }
+  }
+  const choices = new Map(ids.map((g, i) => [g, 1 + out[i].filter(w => part[w] === part[i]).length]));
+  const size = new Map(), arrows = new Map();
+  for (let v = 0; v < 2 * n; v++) {
+    size.set(part[v], (size.get(part[v]) || 0) + 1);
+    for (const w of out[v]) if (part[w] === part[v]) arrows.set(part[v], (arrows.get(part[v]) || 0) + 1);
+  }
+  const loops = [...size].filter(([, k]) => k > 1).map(([p]) => p);
+  return { choices, onlyTwo: loops.length === 1 && arrows.get(loops[0]) === size.get(loops[0]) };
 }
 
 export function apply(state, op, me, now = Date.now()) {
@@ -487,7 +585,7 @@ export function apply(state, op, me, now = Date.now()) {
     if (d.organizerId !== me.id && !me.admin) throw new OpError('forbidden', 'Only the person who started this draw can change it.', 403);
     return d;
   };
-  const canChangeItem = it => (it.secret ? it.addedBy === me.id : keepsList(relation(state, me, it.ownerId)));
+  const canChangeItem = it => mayChangeItem(state, me, it);
   const shoppable = it => {
     const rel = relation(state, me, it.ownerId);
     if (hidesPurchases(rel)) {
@@ -502,16 +600,22 @@ export function apply(state, op, me, now = Date.now()) {
       const owner = person(op.ownerId);
       if (!owner) throw new OpError('not_found', 'That person is no longer on the list.', 409);
       if (!visible(owner.id)) throw new OpError('forbidden', 'That list is not shared with you.', 403);
-      const onList = state.items.filter(i => i.ownerId === owner.id && !i.removedAt).length;
-      if (onList >= LIMITS.itemsPerList || state.items.length >= LIMITS.items) {
-        throw new OpError('limit', 'This list is full. Remove a few things first.');
-      }
+      // Gifts and secret ideas are counted apart, so the owner can never work out how many
+      // secret ideas there are by finding where their own list fills up.
       const rel = relation(state, me, owner.id);
+      const secret = rel === 'shop';
+      const onList = state.items.filter(i => i.ownerId === owner.id && !i.removedAt && Boolean(i.secret) === secret).length;
+      if (state.items.length >= LIMITS.items) throw new OpError('limit', 'The wish list is full. Remove a few old gifts first.');
+      if (onList >= (secret ? LIMITS.ideasPerList : LIMITS.itemsPerList)) {
+        throw new OpError('limit', secret ? `There are already ${LIMITS.ideasPerList} secret ideas for ${owner.name}. Remove a few of yours first.`
+          : 'This list is full. Remove a few gifts first.');
+      }
       const id = newId();
       state.items.push({
-        id, ownerId: owner.id, addedBy: me.id, secret: rel === 'shop',
+        id, ownerId: owner.id, addedBy: me.id, secret,
         url: op.url, store: op.store, title: op.title, image: op.image, priceCents: op.priceCents,
-        note: op.note, qty: op.qty, audience: giftAudience(op.audience, owner, rel === 'shop'),
+        note: op.note, qty: op.qty, audience: giftAudience(op.audience, owner, secret),
+        linkCheck: op.url ? (op.linkCheck || localCheck(op.url)) : null,
         createdAt: now, editedAt: null, removedAt: null
       });
       return id;
@@ -520,8 +624,19 @@ export function apply(state, op, me, now = Date.now()) {
       const it = item(op.id);
       if (!it || it.removedAt || !seen(it)) throw NOT_FOUND();
       if (!canChangeItem(it)) throw new OpError('forbidden', 'Only the person who added this can change it.', 403);
+      // Every page shows how many are still wanted, so that is what the form sends back. The
+      // ones already given stay counted on top, or they would be wanted all over again.
+      const t = itemTotals(state, it, now);
+      // Keep what it said before the first change after the latest purchase, so the buyers can
+      // be shown what changed. Only buyers ever see this (see view()).
+      const lastBuy = t.open.reduce((n, b) => Math.max(n, b.at), 0);
+      if (lastBuy && (!it.before || it.before.at < lastBuy)) {
+        it.before = { title: it.title, note: it.note || '', priceCents: it.priceCents ?? null, qty: t.left, at: now };
+      }
+      if (!lastBuy) it.before = null;
       Object.assign(it, { url: op.url, store: op.store, title: op.title, image: op.image,
-        priceCents: op.priceCents, note: op.note, qty: op.qty,
+        priceCents: op.priceCents, note: op.note, qty: op.qty + (it.qty - t.left),
+        linkCheck: op.url ? (op.linkCheck || localCheck(op.url)) : null,
         audience: giftAudience(op.audience, person(it.ownerId) || { id: it.ownerId }, Boolean(it.secret)), editedAt: now });
       return it.id;
     }
@@ -615,13 +730,18 @@ export function apply(state, op, me, now = Date.now()) {
       return op.id;
     }
     case 'saveKid': {
-      const managers = [...new Set([me.id, ...op.managers.filter(id => id !== op.id && person(id)?.email)])].slice(0, 6);
+      const chosen = op.managers.filter(id => id !== op.id && person(id)?.email);
       const same = state.people.find(p => p.id !== op.id && p.name.toLowerCase() === op.name.toLowerCase());
       if (same) {
+        // Grown-ups' names are no secret (everyone picks from them when sharing). For a kid,
+        // say whose list it is only to someone who can already see it; anyone else gets a
+        // message that gives nothing away about a list kept from them.
         const keepers = (same.managers || []).map(id => person(id)?.name).filter(Boolean);
-        throw new OpError('invalid', same.email || !keepers.length
+        throw new OpError('invalid', same.email
           ? `${same.name} is already on the list. Add a last name or initial so people can tell them apart.`
-          : `There is already a list for ${same.name}, kept by ${keepers.join(' and ')}. Ask them to add you as a parent on it.`);
+          : keepers.length && visible(same.id)
+            ? `There is already a list for ${same.name}, kept by ${keepers.join(' and ')}. Ask them to add you as a parent on it.`
+            : 'That name is already taken. Add a last name or initial so people can tell them apart.');
       }
       if (op.id) {
         const p = person(op.id);
@@ -630,9 +750,15 @@ export function apply(state, op, me, now = Date.now()) {
         if (!me.admin && !keepsList(relation(state, me, p.id))) {
           throw new OpError('forbidden', `Only the parents who keep ${p.name}'s list can change it.`, 403);
         }
+        // The parent who made the list always stays on it, and so does a parent changing it.
+        // The admin can change any kid's list without being made one of its parents.
+        const creator = p.addedBy && person(p.addedBy)?.email ? [p.addedBy] : [];
+        const managers = [...new Set([...creator, ...(me.admin ? [] : [me.id]), ...chosen])].slice(0, 6);
+        if (!managers.length) throw new OpError('invalid', `Pick at least one parent to keep ${op.name}'s list.`);
         Object.assign(p, { name: op.name, managers, parentsSee: op.parentsSee });
         return p.id;
       }
+      const managers = [...new Set([me.id, ...chosen])].slice(0, 6);
       if (state.people.length >= LIMITS.people) throw new OpError('limit', `The list holds up to ${LIMITS.people} people. Ask ${boss}.`);
       const added = state.people.filter(p => !p.email && p.addedBy === me.id).length;
       if (!me.admin && added >= LIMITS.kidsPerParent) {
@@ -675,8 +801,11 @@ export function apply(state, op, me, now = Date.now()) {
       return null;
     }
     case 'saveDraw': {
-      // Anyone who signs in may start a draw among the lists they can see.
-      const participants = op.participants.filter(id => person(id) && visible(id));
+      // Anyone who signs in may start a draw among the lists they can see. When a draw is
+      // changed, the people already in it stay even if their list is now kept from the
+      // organizer; only people being added must be visible.
+      const before = op.id ? draw(op.id).participants : [];
+      const participants = op.participants.filter(id => person(id) && (before.includes(id) || visible(id)));
       if (participants.length < 3) throw new OpError('invalid', 'Pick at least three people for the draw.');
       const apart = op.apart.filter(([a, b]) => participants.includes(a) && participants.includes(b));
       const fields = { name: op.name, participants, apart, budget: op.budget, giveBy: op.giveBy };

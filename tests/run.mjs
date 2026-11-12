@@ -1,6 +1,6 @@
 // Runs the test suites, each against its own fresh dev server and empty data folder.
 //
-//   npm test                 api, flow, onboard, grid
+//   npm test                 api, flow, onboard, family, grid
 //   npm run test:screens     screenshots of every screen, plus axe (WCAG 2.2 AA) in light and dark
 //   node tests/run.mjs flow  one suite
 import { spawn } from 'node:child_process';
@@ -18,14 +18,16 @@ const freePort = () => new Promise(resolve => {
   const s = net.createServer().listen(0, () => { const { port } = s.address(); s.close(() => resolve(port)); });
 });
 
-// The click-through suite reads a stand-in store on this computer instead of a real one.
+// The click-through suite reads a stand-in store on this computer instead of a real one. Every
+// suite keeps the link check to its instant checks, so no test reaches out to real websites.
 const SUITE_ENV = { flow: { LISTS_LOOKUP_ALLOW_LOCAL: '1' } };
+const ALL_ENV = { LISTS_LINKCHECK_OFFLINE: '1' };
 
 async function startServer(name) {
   const port = await freePort();
   const data = await mkdtemp(path.join(tmpdir(), 'wish-list-test-'));
   const child = spawn(process.execPath, [path.join(ROOT, 'dev/server.mjs'), String(port), data],
-    { stdio: 'ignore', env: { ...process.env, ...(SUITE_ENV[name] || {}) } });
+    { stdio: 'ignore', env: { ...process.env, ...ALL_ENV, ...(SUITE_ENV[name] || {}) } });
   const base = `http://localhost:${port}`;
   for (let i = 0; i < 50; i++) {
     try { if ((await fetch(base + '/api/lists/health')).ok) break; } catch {}

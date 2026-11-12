@@ -27,3 +27,8 @@ function handle(method) {
 
 export const GET = handle('GET');
 export const POST = handle('POST');
+// HEAD gets the same answer as GET without a body, so uptime checks can use it.
+export const HEAD = async request => {
+  const res = await handle('GET')(request);
+  return new Response(null, { status: res.status, headers: res.headers });
+};

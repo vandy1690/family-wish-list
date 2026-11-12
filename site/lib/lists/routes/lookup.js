@@ -5,10 +5,11 @@ import { personForRequest } from '../auth.js';
 import { readState } from '../store.js';
 import { cleanUrl } from '../rules.js';
 import { lookupProduct, guessFromUrl, Blocked } from '../meta.js';
+import { checkLink, forPage } from '../linkcheck.js';
 
 const WHY = {
   robots: 'This store asks apps not to read its pages, so the details could not be filled in.',
-  refused: 'This store turned the request away, so the details could not be filled in.',
+  refused: 'This store does not share its page details with apps, so the details could not be filled in.',
   missing: 'That page could not be found. Check the link.',
   unreachable: 'That store did not answer. Check the link, or try again later.'
 };
@@ -27,6 +28,9 @@ export async function POST(request) {
     console.error('lookup auth failed', e);
     return json({ error: 'server_error', message: 'Try again in a moment.' }, 500);
   }
+  // Whether the link looks safe, worked out alongside the lookup and sent with every answer.
+  const checking = checkLink(url).then(forPage, () => null);
+  const answer = async data => json({ ...data, check: await checking });
   // When the store says no, the name often still sits in the link itself (no request needed).
   const guess = guessFromUrl(url);
   const withGuess = message => (guess
@@ -34,12 +38,12 @@ export async function POST(request) {
     : { message: message + TIP });
   try {
     const found = await lookupProduct(url);
-    if (!found.title && !found.image) return json({ blocked: 'empty', ...withGuess('That page does not share a name or photo.') });
-    return json({ ok: true, url, ...found });
+    if (!found.title && !found.image) return answer({ blocked: 'empty', ...withGuess('That page does not share a name or photo.') });
+    return answer({ ok: true, url, ...found });
   } catch (e) {
     const reason = e instanceof Blocked ? e.reason : 'unreachable';
     if (!(e instanceof Blocked)) console.error('lookup failed', url, e && e.message);
-    if (reason === 'missing') return json({ blocked: reason, message: WHY.missing });
-    return json({ blocked: reason, ...withGuess(WHY[reason] || WHY.unreachable) });
+    if (reason === 'missing') return answer({ blocked: reason, message: WHY.missing });
+    return answer({ blocked: reason, ...withGuess(WHY[reason] || WHY.unreachable) });
   }
 }

@@ -9,6 +9,7 @@
 // Each person has a version number (`ver`). The admin's "Sign out everywhere" bumps it, which
 // voids every cookie and link that person was given before.
 import { createHash, createHmac, randomInt, timingSafeEqual } from 'node:crypto';
+import { devMode } from './dev.js';
 
 const COOKIE = 'wl_session';
 const SESSION_MAX_AGE = 400 * 24 * 60 * 60;   // seconds
@@ -45,15 +46,17 @@ function unseal(kind, token) {
 
 // ---------------------------------------------------------------- email link
 
+// A link works once, and only the newest one does: it carries the time it was sent
+// (`linkAt`), which a newer email replaces and signing in clears.
 export function linkToken(person, now = Date.now()) {
-  return seal('link', { p: person.id, v: person.ver || 0, x: now + LINK_MINUTES * 60_000 });
+  return seal('link', { p: person.id, v: person.ver || 0, l: person.linkAt, x: now + LINK_MINUTES * 60_000 });
 }
 
 export function personForLink(state, token, now = Date.now()) {
   const t = unseal('link', token);
-  if (!t || typeof t.x !== 'number' || t.x < now) return null;
+  if (!t || typeof t.x !== 'number' || t.x < now || typeof t.l !== 'number') return null;
   const p = state.people.find(x => x.id === t.p);
-  return p && p.email && (p.ver || 0) === t.v ? p : null;
+  return p && p.email && (p.ver || 0) === t.v && p.linkAt === t.l ? p : null;
 }
 
 // ---------------------------------------------------------------- six digit code
@@ -73,13 +76,17 @@ export function codeMatches(person, code, now = Date.now()) {
 
 // ---------------------------------------------------------------- session cookie
 
+// Secure everywhere except the local test server, which runs on plain http (Safari will not
+// keep a Secure cookie there, so phone screens could not be tested signed in).
+const secure = () => (devMode() ? '' : ' Secure;');
+
 export function sessionCookie(person, now = Date.now()) {
   const value = seal('session', { p: person.id, v: person.ver || 0, t: now });
-  return `${COOKIE}=${value}; Path=/; Max-Age=${SESSION_MAX_AGE}; HttpOnly; Secure; SameSite=Lax`;
+  return `${COOKIE}=${value}; Path=/; Max-Age=${SESSION_MAX_AGE}; HttpOnly;${secure()} SameSite=Lax`;
 }
 
 export function clearedCookie() {
-  return `${COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`;
+  return `${COOKIE}=; Path=/; Max-Age=0; HttpOnly;${secure()} SameSite=Lax`;
 }
 
 // The signed-in person, or null. Needs the current state so a removed person, or one

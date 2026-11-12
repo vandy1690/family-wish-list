@@ -84,7 +84,7 @@ step('John adds Jane on the People page');
 // A write-in with a photo.
 await S.page.getByRole('link', { name: 'Lists' }).click();
 await heading(S.page, 'My list').waitFor();
-await S.page.getByRole('button', { name: 'Add an item' }).click();
+await S.page.getByRole('button', { name: 'Add a gift' }).click();
 await S.page.getByLabel('What is it?').fill("Aunt Suzy's cinnamon rolls");
 await S.page.getByLabel('Price (optional)').fill('15');
 await S.page.locator('#f-file').setInputFiles(PHOTO);
@@ -95,7 +95,7 @@ const rollsCard = S.page.locator('.wl-card', { hasText: "Aunt Suzy's cinnamon ro
 assert.equal(await rollsCard.locator('.wl-card__store').count(), 0, 'no store line without a link');
 assert.ok((await rollsCard.locator('img').getAttribute('src')).startsWith('/api/lists/photo?id='));
 step('Write-in with an uploaded photo is added');
-await S.page.getByRole('button', { name: 'Add an item' }).click();
+await S.page.getByRole('button', { name: 'Add a gift' }).click();
 await S.page.getByLabel('What is it?').fill('Hiking poles');
 await S.page.getByLabel('Price (optional)').fill('$120');
 await S.page.locator('details.wl-more').evaluate(d => { d.open = true; });
@@ -135,7 +135,7 @@ await heading(A.page, "John's list").waitFor();
 await openItem(A.page, "Aunt Suzy's cinnamon rolls");
 await A.page.getByRole('button', { name: 'I bought this' }).click();
 await A.page.locator('#toastText', { hasText: 'John will not see this.' }).waitFor();
-assert.ok((await A.page.locator('.wl-detail').innerText()).includes('You bought this'));
+assert.ok((await A.page.locator('.wl-detail').innerText()).includes('You marked it bought on'));
 step('Jane opens the rolls on her phone and taps I bought this');
 await A.page.goBack();
 await openItem(A.page, 'Trekking poles');
@@ -256,6 +256,11 @@ step('Android share fills the link and the name from shared text');
   await S.page.getByRole('button', { name: 'Get details from the link' }).click();
   await S.page.locator('#toastText', { hasText: 'Filled in what the store shares' }).waitFor({ timeout: 15000 });
   assert.equal(await S.page.getByLabel('What is it?').inputValue(), 'Team Home Jersey');
+  // The stand-in store is a number address over http, so its link gets a warning.
+  assert.equal(await S.page.locator('#f-url-check .wl-linkcheck__title').innerText(), 'This link looks unsafe');
+  // The form: Store link first, then the name, then the notes.
+  const order = await S.page.locator('form .sdc-field__input, form .sdc-select').evaluateAll(n => n.map(x => x.id));
+  assert.deepEqual(order.filter(x => ['f-url', 'f-title', 'f-note', 'f-price', 'f-qty'].includes(x)), ['f-url', 'f-title', 'f-note', 'f-price', 'f-qty'], 'form order: ' + order.join());
   assert.ok((await S.page.locator('.wl-photo__frame img').getAttribute('src')).includes('shop.example.com/jersey.jpg'));
   assert.equal(await S.page.getByLabel('Notes (optional)').inputValue(), 'Size L');
   await S.page.getByRole('button', { name: 'Add to the list' }).click();
@@ -265,7 +270,7 @@ step('Android share fills the link and the name from shared text');
 
 // Equal cards, and the name standing in for a missing photo.
 {
-  await S.page.getByRole('button', { name: 'Add an item' }).click();
+  await S.page.getByRole('button', { name: 'Add a gift' }).click();
   await S.page.getByLabel('What is it?').fill('A knitted dog from Charlie');
   await S.page.locator('details.wl-more').evaluate(d => { d.open = true; });
   await S.page.getByLabel('Notes (optional)').fill('Any color. Charlie knows the one. A long note to make this card taller than the others in the row, line after line after line.');
@@ -297,17 +302,17 @@ step('An item shared while signed out waits through sign-in');
   // Sam arrived with something to add, so setup waited; it shows now. Skip it here.
   await N.page.getByRole('heading', { level: 1, name: 'Welcome, Sam' }).waitFor();
   await N.page.getByRole('button', { name: 'Skip setup for now' }).click();
-  await N.page.getByRole('button', { name: 'Add an item' }).click();
+  await N.page.getByRole('button', { name: 'Add a gift' }).click();
   await N.page.getByLabel('What is it?').fill('Something');
   await N.page.goBack();
-  await N.page.getByRole('button', { name: 'Add an item' }).waitFor();
+  await N.page.getByRole('button', { name: 'Add a gift' }).waitFor();
   assert.equal(await N.page.getByLabel('What is it?').count(), 0, 'form closed');
   assert.equal(await N.page.getByRole('heading', { level: 1 }).innerText(), 'My list', 'still on the list');
   step('Back closes the add form and stays on the list');
 }
 // A link pasted as the name moves to Store link; a long name never scrolls sideways.
 {
-  await N.page.getByRole('button', { name: 'Add an item' }).click();
+  await N.page.getByRole('button', { name: 'Add a gift' }).click();
   await N.page.getByLabel('What is it?').fill('https://www.example.com/a-very-long-product-path-with-no-spaces-at-all-0123456789');
   await N.page.getByRole('button', { name: 'Add to the list' }).click();
   await N.page.getByText('That was a link, so it moved to Store link.').waitFor();
@@ -326,9 +331,9 @@ step('An item shared while signed out waits through sign-in');
 {
   const X = await newPage(390);
   await X.page.goto(BASE + '/lists', { waitUntil: 'networkidle' });
-  await X.page.getByLabel('Your email address').fill('angei@example.com');
+  await X.page.getByLabel('Your email address').fill('jnae@example.com');
   await X.page.getByRole('button', { name: 'Send me a sign-in code' }).click();
-  await X.page.getByText('We sent a code to angei@example.com.').waitFor();
+  await X.page.getByText('We sent a code to jnae@example.com.').waitFor();
   await X.page.getByRole('button', { name: 'Use a different email' }).click();
   assert.equal(await X.page.evaluate(() => document.activeElement.id), 'email');
   await X.page.getByLabel('Your email address').fill('not-an-email');
@@ -360,6 +365,22 @@ step('An item shared while signed out waits through sign-in');
   assert.equal(await get.getAttribute('href'), link);
   assert.ok(!/Run JavaScript on Web Page/.test(await N.page.locator('.wl-help').innerText()), 'build steps replaced by the button');
   step('iPhone steps: build guide until John saves the iCloud link on People, then a one-tap Get the iPhone shortcut button');
+}
+
+// The emailed link signs in too, once. Opening it does not sign in by itself: the page does.
+{
+  const L = await newPage(390);
+  const sent = await (await fetch(BASE + '/api/lists/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'jane@example.com' }) })).json();
+  await L.page.goto(sent.dev.link, { waitUntil: 'networkidle' });
+  await L.page.locator('#whoName', { hasText: 'Jane' }).waitFor();
+  assert.ok(!L.page.url().includes('#t='), 'the token leaves the address bar: ' + L.page.url());
+  await L.page.locator('#toastText', { hasText: 'You are signed in.' }).waitFor();
+  const L2 = await newPage(390);
+  await L2.page.goto(sent.dev.link, { waitUntil: 'networkidle' });
+  await L2.page.locator('#signinStatus', { hasText: 'run out' }).waitFor();
+  assert.equal(await L2.page.locator('#whoName').isVisible(), false);
+  step('The emailed link signs in once; opened again, it says it has run out');
 }
 
 // Sign out from the top right.
