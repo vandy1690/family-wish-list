@@ -1279,8 +1279,8 @@
   function giftChoices(owner, secret) {
     const keepers = owner.managers || [];
     const skip = new Set([me().id, owner.id, ...(secret ? [] : keepers)]);
-    // The admin always sees every gift, so picking them would change nothing.
-    let list = S.data.members.filter(m => !skip.has(m.id) && !m.admin);
+    // The admin can be picked like anyone else: a gift can be kept from the admin too.
+    let list = S.data.members.filter(m => !skip.has(m.id));
     if (Array.isArray(owner.audience)) list = list.filter(m => owner.audience.includes(m.id) || keepers.includes(m.id));
     return list;
   }
@@ -1292,7 +1292,7 @@
     const mode = m => () => { v.audienceMode = m; S.focus = `input[name="f-who"][value="${m}"]`; draw(); };
     const always = [secret ? `${owner.name} never sees a secret idea.` : null,
       !secret && owner.rel !== 'own' ? `${possessive(owner.name)} parents always see it.` : null,
-      me().admin ? null : `${S.data.site.adminName} can always see every gift, to help.`,
+      me().admin ? null : `${S.data.site.adminName} sees it only if you pick ${S.data.site.adminName}.`,
       'Anyone who already bought it keeps seeing it.'].filter(Boolean).join(' ');
     return el('fieldset', { class: 'sdc-fieldset' },
       el('legend', null, 'Who can see this gift?'),

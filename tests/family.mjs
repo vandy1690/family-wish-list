@@ -297,11 +297,15 @@ const h1 = (p, name) => p.getByRole('heading', { level: 1, name }).waitFor();
   assert.equal(await a.getByLabel('Jane', { exact: true }).count(), 0, 'you are not offered to yourself');
   await a.getByLabel('Mary', { exact: true }).check();
   assert.ok((await a.locator('form:has(#f-save)').innerText()).includes('Anyone who already bought it keeps seeing it.'));
+  assert.equal(await a.getByLabel('John', { exact: true }).count(), 1, 'the admin can be picked like anyone else');
+  assert.ok((await a.locator('form:has(#f-save)').innerText()).includes('John sees it only if you pick John.'), 'and the form says so');
   await a.getByRole('button', { name: 'Add to the list' }).click();
   await toast(a, 'Added to your list.');
   const mine = a.locator('.wl-card', { hasText: 'Concert tickets' });
   assert.ok((await mine.innerText()).includes('Shown only to Mary'), 'Jane\'s card says who sees it');
-  step('Jane adds concert tickets shown only to Mary; her card says "Shown only to Mary"');
+  const johnSees = (await john.call('/api/lists/data')).items.some(i => i.title === 'Concert tickets');
+  assert.equal(johnSees, false, 'John, the admin, was not picked, so he never receives it');
+  step('Jane adds concert tickets shown only to Mary; her card says "Shown only to Mary", and John, the admin, does not get it');
 
   const m = await pageFor(U.Mary);
   await m.goto(BASE + `/lists?list=${id.Jane}`, { waitUntil: 'networkidle' });

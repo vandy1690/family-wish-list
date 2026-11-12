@@ -49,7 +49,7 @@ Every change goes through the same file (`apply()`), which checks who is asking 
 Limiting who sees something never hides it from the people who need it:
 
 - **A list** is always seen by its owner, a kid's parents, the admin, and anyone who drew that person in a name draw.
-- **A gift shown to only some people** is always seen by whoever added it, the list's owner and a kid's parents (for their own gifts, never a secret idea), the admin, and anyone who already bought it or chipped in.
+- **A gift shown to only some people** is always seen by whoever added it, the list's owner and a kid's parents (for their own gifts, never a secret idea), and anyone who already bought it or chipped in. The admin is not an exception, so a surprise for the admin stays a surprise. The one exception is a gift whose author was removed from the list, so it is never stuck where nobody can change it.
 - **A name draw** stays a secret from whoever set it up. A draw is refused when its Keep apart pairs would leave someone only one person to draw, or (above three people) only two ways to match everyone, since then the matches could be worked out. Everyone in a draw sees how many pairs are kept apart. Drawing a name never opens a list to someone it was hidden from: for a kid, every parent who keeps the kid's list must already see the person drawn.
 
 ## Designed for grandparents and kids

@@ -134,11 +134,14 @@ export function drawnFor(state, me) {
 
 // One gift can be limited further (`audience` on the item). Who always sees a limited gift:
 // the person who added it, the list's owner and a kid's parents (for their own gifts, never a
-// secret idea), the admin, and anyone who already bought it or chipped in.
+// secret idea), and anyone who already bought it or chipped in. The admin is no exception
+// (Steve, 2026-11-12: a surprise for the admin must stay a surprise), except for a gift whose
+// author was removed, so it is never stuck where nobody can change or remove it.
 export function seesItem(state, me, it, drawn = drawnFor(state, me)) {
   if (!canSee(state, me, it.ownerId, drawn)) return false;
-  if (!Array.isArray(it.audience) || me.admin || it.addedBy === me.id || it.audience.includes(me.id)) return true;
+  if (!Array.isArray(it.audience) || it.addedBy === me.id || it.audience.includes(me.id)) return true;
   if (!it.secret && keepsList(relation(state, me, it.ownerId))) return true;
+  if (me.admin && !state.people.some(p => p.id === it.addedBy)) return true;
   return state.buys.some(b => b.itemId === it.id && b.buyerId === me.id) || state.chips.some(c => c.itemId === it.id && c.personId === me.id);
 }
 
