@@ -19,6 +19,7 @@ Store wish lists tie a family to one store, and most list apps assume everyone i
 
 - **One list per person,** from any store. Paste a link, tap the Add to Wish List button on a store's page (a bookmark on a computer, a Shortcut on iPhone, the Share menu on Android), or write something in, like "Grandma's cookies".
 - **Shoppers mark what they bought,** go in together on a big gift, and add secret ideas to someone's list.
+- **Going in together, with the family kept in the loop.** Ask people to go in: the wish list emails each one a link to the gift (only people who could go in are offered, never the person it is for), or send it yourself by text, WhatsApp or email. When someone joins, changes their amount or drops out, the others going in get a short email, and the app marks them "New". At most one ask per person per gift a day, and anyone can turn these emails off on My shopping.
 - **The person a list is for never sees** purchases, chip-ins or secret ideas.
 - **Kids' lists,** kept by their parents. A child needs no email; a parent adds the list and decides whether the parents see purchases.
 - **Who can see a list:** everyone in the family, or only the people the owner picks.
@@ -26,9 +27,10 @@ Store wish lists tie a family to one store, and most list apps assume everyone i
 - **How many and notes on every gift,** right on the form: "3 pairs, size L, any color but pink." Cards show the start of the note.
 - **Draw names** (Secret Santa). Only the giver sees who they drew, not even the person who started the draw. Spending limit, give-by date, and pairs to keep apart; parents and their own kids never draw each other.
 - **Ask to join.** A relative who is not on the list can ask from the sign-in page. Only the admin adds people.
-- **Share by text or email.** Every list has a button that starts a text or an email with the list's link written in, so someone using the installed app (which has no address bar) can pass a list along. There is no copy-the-link button on purpose.
+- **Share by text, WhatsApp or email.** Every list has a button that starts a text, a WhatsApp message or an email with the list's link written in, so someone using the installed app (which has no address bar) can pass a list along. There is no copy-the-link button on purpose.
 - **A safety check on every store link.** See below.
 - **My shopping:** everything you bought, in one place. Tap "It has been given" after a gift is opened. Anything still marked bought counts as given on December 26.
+- **Gift history.** Everything you gave, by person and year, kept after the gift leaves the list, so nobody gets the same thing twice. Someone's list also says what you gave them before. Only the giver sees it.
 - **Sizes and favorites** on each list, so clothes fit and nobody gets peanuts by mistake.
 - **First-run setup,** one question per screen, then a short tour that points at the real buttons.
 
@@ -68,9 +70,9 @@ Limiting who sees something never hides it from the people who need it:
 
 Everything is driven the way a person would use it, in a real browser:
 
-- **api:** over 780 checks of the rules, sign-in, photos, link lookups and link safety, robots.txt, list and gift sharing, join requests and name draws.
+- **api:** over 810 checks of the rules, sign-in, photos, link lookups and link safety, robots.txt, list and gift sharing, going in together, gift history, join requests and name draws.
 - **flow, onboard, family:** click-through suites in Chromium on a computer and a phone, from first sign-in to drawing names.
-- **screens:** 55 screens in light and dark, at phone and computer widths, each run through [axe](https://github.com/dequelabs/axe-core) for WCAG 2.2 AA, with checks for sideways scrolling and page errors.
+- **screens:** 60 screens in light and dark, at phone and computer widths, each run through [axe](https://github.com/dequelabs/axe-core) for WCAG 2.2 AA, with checks for sideways scrolling and page errors.
 - **grid:** fields that sit side by side line up.
 - **check:styles:** proves the trimmed design system styles match the full ones, element by element.
 

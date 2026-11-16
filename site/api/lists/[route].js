@@ -3,6 +3,7 @@
 // Vercel's free plan allows 12 functions per deployment, and this app is built to share a
 // site with other apps. One file per route would use nine of the twelve, so the routes live
 // in lib/lists/routes/ and this file hands each request to the right one.
+import * as ask from '../../lib/lists/routes/ask.js';
 import * as config from '../../lib/lists/routes/config.js';
 import * as data from '../../lib/lists/routes/data.js';
 import * as health from '../../lib/lists/routes/health.js';
@@ -13,7 +14,7 @@ import * as photo from '../../lib/lists/routes/photo.js';
 import * as joinRequest from '../../lib/lists/routes/request.js';
 import * as verify from '../../lib/lists/routes/verify.js';
 
-const ROUTES = { config, data, health, login, logout, lookup, photo, request: joinRequest, verify };
+const ROUTES = { ask, config, data, health, login, logout, lookup, photo, request: joinRequest, verify };
 
 function handle(method) {
   return request => {

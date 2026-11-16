@@ -76,6 +76,15 @@ const shelby = await add(U.Ben, id.Ben, { url: 'https://www.lego.com/en-us/produ
 await add(U.Ben, id.Ben, { url: 'https://www.lego.com/en-us/product/nasa-artemis-space-launch-system-10341', title: 'NASA Artemis Space Launch System', price: '259.99', image: await U.Ben.photo('artemis') });
 // A link that looks unsafe: one letter off a big store's name (checked without the network here).
 const lookalike = await add(U.Ben, id.Ben, { url: 'https://amazom.com/deals/lego-technic', title: 'LEGO Technic set, 70% off', price: '39.99' });
+// For Gift history: John gave Ben a book. For going in together: John and Grandma on a telescope.
+const book = await add(U.Ben, id.Ben, { title: 'Field guide to North American birds', price: '24' });
+{
+  const v = await john.op({ op: 'buy', itemId: book, qty: 1 });
+  await john.op({ op: 'given', buyId: v.shopping.buys.find(b => b.itemId === book).id });
+}
+const telescope = await add(U.Ben, id.Ben, { title: 'Backyard telescope', price: '250' });
+await john.op({ op: 'chip', itemId: telescope, amount: '100' });
+await U.Grandma.op({ op: 'chip', itemId: telescope, amount: '50' });
 await john.op({ op: 'buy', itemId: shelby, qty: 1 });
 
 // Ella, kept by Aunt Suzy
@@ -204,10 +213,16 @@ for (const theme of ['light', 'dark']) {
     await p.locator('#fa-box').waitFor();
   } });
 }
+// Asking others to go in, and My shopping with going in together and Gift history.
+await shot(john, '28-ask-panel', `/lists?item=${telescope}`, { width: 390, height: 844, act: async p => {
+  await p.getByRole('button', { name: 'Ask others to go in' }).click();
+  await p.locator('input[name="ask-who"]').first().waitFor();
+} });
+for (const theme of ['light', 'dark']) await shot(john, '29-shopping-history', '/lists?view=shopping', { theme, width: 390, height: 844 });
 // Sending a list by text or email.
 for (const [width, theme] of [[390, 'light'], [1280, 'dark']]) {
   await shot(U.Sam, '26-send-list', '/lists', { width, theme, height: width === 390 ? 844 : 900, act: async p => {
-    await p.getByRole('button', { name: 'Share by text or email' }).click();
+    await p.getByRole('button', { name: 'Share by text, WhatsApp or email' }).click();
   } });
 }
 await shot(U.Sam, '23-gift-audience', '/lists', { width: 390, act: async p => {

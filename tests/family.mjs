@@ -281,19 +281,87 @@ const h1 = (p, name) => p.getByRole('heading', { level: 1, name }).waitFor();
 {
   const a = await pageFor(U.Jane, { width: 390, height: 800 });
   await a.goto(BASE + '/lists', { waitUntil: 'networkidle' });
-  await a.getByRole('button', { name: 'Share by text or email' }).click();
-  await a.getByRole('heading', { name: 'Share by text or email' }).waitFor();
+  await a.getByRole('button', { name: 'Share by text, WhatsApp or email' }).click();
+  await a.getByRole('heading', { name: 'Share by text, WhatsApp or email' }).waitFor();
   const text = await a.getByRole('link', { name: 'Send a text' }).getAttribute('href');
   const mail = await a.getByRole('link', { name: 'Send an email' }).getAttribute('href');
+  const wa = await a.getByRole('link', { name: /Send on WhatsApp/ }).getAttribute('href');
   const listUrl = `${BASE}/lists?list=${id.Jane}`;
   assert.ok(text.startsWith('sms:') && decodeURIComponent(text).includes(listUrl), 'the text carries the link: ' + text);
+  assert.ok(wa.startsWith('https://wa.me/?text=') && decodeURIComponent(wa).includes(listUrl), 'so does WhatsApp: ' + wa);
   assert.ok(mail.startsWith('mailto:?subject=My%20wish%20list') && decodeURIComponent(mail).includes(listUrl), 'so does the email: ' + mail);
   assert.equal(await a.locator('section[aria-labelledby="sendH"]').locator('input, textarea').count(), 0, 'no box to copy a link from');
   assert.equal(await a.getByRole('button', { name: /copy/i }).count(), 0, 'and no copy button');
   assert.equal(await a.evaluate(() => document.activeElement.id), 'sendText');
   await a.getByRole('button', { name: 'Done' }).click();
   assert.equal(await a.evaluate(() => document.activeElement.id), 'sendBtn', 'Done puts focus back');
-  step('Share by text or email offers a text and an email with the link written in, and nothing to copy');
+  step('Share by text, WhatsApp or email offers all three with the link written in, and nothing to copy');
+}
+
+// ------------------------------------------------------------ going in together, and gift history
+{
+  const kayak = (await U.Mary.op({ op: 'addItem', ownerId: id.Mary, title: 'Kayak', price: '600', qty: 1 })).id;
+  const a = await pageFor(U.Jane, { width: 390, height: 844 });
+  await a.goto(BASE + `/lists?item=${kayak}`, { waitUntil: 'networkidle' });
+  await a.getByRole('button', { name: 'Go in together' }).click();
+  await a.getByLabel('How much will you put in? (dollars)').fill('100');
+  await a.getByRole('button', { name: 'Save my amount' }).click();
+  await toast(a, 'Saved. Whoever buys it taps I bought this.');
+  await a.getByRole('button', { name: 'Ask others to go in' }).click();
+  await a.getByRole('heading', { name: 'Ask others to go in' }).waitFor();
+  await a.locator('input[name="ask-who"]').first().waitFor();
+  const offered = await a.locator('fieldset label').allInnerTexts();
+  assert.ok(!offered.some(t => t.startsWith('Mary')), 'Mary, whose list it is, is never offered: ' + offered.join(' | '));
+  await a.getByRole('button', { name: 'Email them' }).click();
+  await a.locator('#ask-err', { hasText: 'Pick at least one person to ask.' }).waitFor();
+  await a.getByLabel('Maria Garcia').check();
+  assert.equal(await a.locator('#ask-err').count(), 0, 'the error goes once someone is picked');
+  const wa = await a.getByRole('link', { name: /Send on WhatsApp/ }).getAttribute('href');
+  assert.ok(decodeURIComponent(wa).includes(`/lists?item=${kayak}`), 'WhatsApp, text and email carry the gift\'s link');
+  await a.getByRole('button', { name: 'Email them' }).click();
+  await toast(a, 'Asked Maria Garcia. They get an email with a link to this gift.');
+  step('Jane goes in on the kayak, then asks Maria by email (Mary is never offered); text, WhatsApp and email carry the link too');
+
+  await U.Maria.op({ op: 'chip', itemId: kayak, amount: '75' });
+  await a.goto(BASE + '/lists?view=shopping', { waitUntil: 'networkidle' });
+  const row = a.locator('.wl-row', { hasText: 'toward Kayak' });
+  assert.ok((await row.innerText()).includes('New: Maria Garcia'), 'My shopping marks Maria as new: ' + await row.innerText());
+  assert.ok((await row.innerText()).includes('With Maria Garcia: $175 of $600 so far.'));
+  await a.goto(BASE + `/lists?item=${kayak}`, { waitUntil: 'networkidle' });
+  assert.ok((await a.locator('.wl-chipin').innerText()).includes('New'), 'the gift marks her new too');
+  await a.goto(BASE + '/lists?view=shopping', { waitUntil: 'networkidle' });
+  assert.equal(await a.locator('.wl-row', { hasText: 'toward Kayak' }).getByText('New:').count(), 0, 'once the gift is opened, New goes');
+  const sw = a.getByLabel('Email me when someone asks me to go in on a gift, or joins one I am going in on');
+  assert.ok(await sw.isChecked(), 'the emails are on to start with');
+  await sw.uncheck();
+  await toast(a, 'Saved. You will not get these emails.');
+  assert.equal(await a.getByLabel('Email me when someone asks me to go in on a gift, or joins one I am going in on').isChecked(), false);
+  await a.getByLabel('Email me when someone asks me to go in on a gift, or joins one I am going in on').check();
+  step('Maria goes in: My shopping and the gift mark her New until Jane opens it; the email switch saves');
+
+  // After you buy: one main button, Undo beside the purchase line, the store as a plain link.
+  const hat = (await U.Mary.op({ op: 'addItem', ownerId: id.Mary, title: 'Wool hat', price: '20', qty: 2,
+    url: 'https://www.rei.com/product/1/wool-hat' })).id;
+  await a.goto(BASE + `/lists?item=${hat}`, { waitUntil: 'networkidle' });
+  await a.getByRole('button', { name: 'I bought this' }).click();
+  await a.getByRole('button', { name: /^Save/ }).click();
+  await a.locator('#givenBtn').waitFor();
+  const filled = await a.locator('.wl-stack .sdc-btn--primary').allInnerTexts();
+  assert.deepEqual(filled, ['It has been given'], 'one main button, the next step: ' + filled.join(' | '));
+  assert.ok(await a.locator('.wl-detail__fact', { hasText: 'You marked it bought' }).getByRole('button', { name: 'Undo, I did not buy it' }).isVisible(),
+    'Undo sits with the purchase line');
+  assert.equal(await a.getByRole('link', { name: /Open it at REI/ }).count(), 1, 'the store is a plain link now');
+  step('After buying, the gift page has one main button, It has been given; Undo sits beside the purchase line');
+
+  await a.getByRole('button', { name: 'It has been given' }).click();
+  await a.getByRole('button', { name: 'Yes, it has been given' }).click();
+  await a.goto(BASE + '/lists?view=shopping', { waitUntil: 'networkidle' });
+  const hist = await a.locator('section[aria-labelledby="histH"]').innerText();
+  assert.ok(hist.includes('Mary') && hist.includes('Wool hat'), 'Gift history lists the hat under Mary: ' + hist);
+  await a.goto(BASE + `/lists?list=${id.Mary}`, { waitUntil: 'networkidle' });
+  assert.ok((await a.locator('.wl-listhead').innerText()).includes('You gave Mary before: Wool hat'), 'her list reminds Jane what she gave');
+  step('Given gifts go into Gift history on My shopping, and the person\'s list says what you gave them before');
+  await U.Mary.op({ op: 'removeItem', id: kayak });
 }
 
 // ------------------------------------------------------------ how many, and notes, on each gift

@@ -66,6 +66,37 @@ export async function sendSignIn({ to, name, link, code, minutes, site }) {
   return {};
 }
 
+// Emails about going in together on a gift (routes/data.js writes them). Sent in one call to
+// Resend's batch address, which takes up to 100 at once.
+export async function sendGiftNotes(notes) {
+  if (!notes.length) return {};
+  if (devLinks()) {
+    for (const n of notes) console.log(`[dev] gift note to ${n.to}: ${n.subject}`);
+    return { dev: true };
+  }
+  const key = process.env.RESEND_API_KEY;
+  if (!key) throw new Error('RESEND_API_KEY is not set');
+  const body = notes.slice(0, 100).map(n => ({
+    from: fromAddress(n.site), to: [n.to], subject: n.subject,
+    ...(process.env.LISTS_REPLY_TO || process.env.LISTS_ADMIN_EMAIL ? { reply_to: process.env.LISTS_REPLY_TO || process.env.LISTS_ADMIN_EMAIL } : {}),
+    text: [`Hi ${n.name},`, '', ...n.lines.flatMap(l => [l, '']), `${n.button}: ${n.link}`, '', n.footer].join('\n'),
+    html: `<!doctype html><html><body style="margin:0;padding:24px;background:#F0EEE9;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;color:#2D3436;font-size:16px;line-height:1.5"><!-- ds-allow: email clients ignore CSS variables, so the SDC values are written out -->
+<div style="max-width:520px;margin:0 auto">
+<p style="margin:0 0 16px">Hi ${esc(n.name)},</p>
+${n.lines.map(l => `<p style="margin:0 0 16px">${esc(l)}</p>`).join('\n')}
+<p style="margin:8px 0 24px"><a href="${esc(n.link)}" style="display:inline-block;padding:14px 24px;border-radius:10px;background:#3F5F92;color:#FFFFFF;font-weight:600;text-decoration:none">${esc(n.button)}</a></p>
+<p style="margin:0;color:#545B5A;font-size:14px">${esc(n.footer)}</p>
+</div></body></html>`
+  }));
+  const res = await fetch('https://api.resend.com/emails/batch', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) throw new Error(`Resend ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  return {};
+}
+
 // Tells the admin that someone asked to join from the sign-in page.
 export async function sendJoinRequest({ name, email, note, link, site }) {
   const to = process.env.LISTS_ADMIN_EMAIL;

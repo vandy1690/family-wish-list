@@ -508,6 +508,75 @@ const mary = new User('mary@example.com'), carlos = new User('carlos@example.com
   ok(r.status === 200 && !r.data.items.some(i => i.id === orphan), 'and john can remove it');
 }
 
+// Going in together: asking people, telling the group, the email switch, and New marks.
+{
+  await sam.signIn();                                   // signed out everywhere earlier in this file
+  const johnId = (await john.data()).data.me.id;
+  let r1 = await sam.op({ op: 'addItem', ownerId: ids.Sam, title: 'Telescope', price: '300', qty: 1 });
+  const scope = r1.data.id;
+  let r2 = await grandma.op({ op: 'chip', itemId: scope, amount: '50' });
+  ok(r2.status === 200 && Array.isArray(r2.data.notified) && r2.data.notified.length === 0, 'the first one in tells nobody: ' + JSON.stringify([r2.status, r2.data.notified, r2.data.message, r2.data.id]));
+  r2 = await jane.op({ op: 'chip', itemId: scope, amount: '100' });
+  ok(r2.data.notified.join() === 'Grandma', 'grandma, already in, is told when jane joins: ' + JSON.stringify(r2.data.notified));
+  r2 = await jane.op({ op: 'chip', itemId: scope, amount: '120' });
+  ok(r2.data.notified.length === 0, 'at most one email an hour per gift: the change is not emailed again');
+  let g = (await grandma.data()).data;
+  const gi = g.items.find(i => i.id === scope);
+  ok(gi.chips.find(c => c.person === 'Jane').isNew === true && gi.chips.find(c => c.mine).isNew === false, 'grandma sees jane marked new');
+  const gs = g.shopping.chips.find(c => c.itemId === scope);
+  ok(gs.newFrom.join() === 'Jane' && gs.total === 17000 && gs.others.join() === 'Jane', 'My shopping says who is new, and the total: ' + JSON.stringify(gs));
+  await grandma.op({ op: 'sawChips', itemId: scope });
+  g = (await grandma.data()).data;
+  ok(!g.items.find(i => i.id === scope).chips.some(c => c.isNew) && g.shopping.chips.find(c => c.itemId === scope).newFrom.length === 0,
+    'opening the gift clears New');
+  ok(!(await sam.data()).data.items.find(i => i.id === scope).chips, 'sam, the owner, still sees none of it');
+
+  // Asking: only people who could go in, at most once a day each.
+  let a = await grandma.op({ op: 'askChip', itemId: scope, people: [ids.Sam, ids.Mary, johnId] });
+  ok(a.status === 200 && [...a.data.notified].sort().join() === 'John,Mary', 'grandma asks mary and john; sam, the owner, is never asked: ' + JSON.stringify(a.data));
+  a = await grandma.op({ op: 'askChip', itemId: scope, people: [ids.Mary] });
+  ok(a.data.notified.length === 0 && a.data.skipped[0].why === 'today', 'mary is not asked twice in a day');
+  const list = await grandma.call(`/api/lists/ask?item=${scope}`);
+  const names = list.data.people.map(p => p.name);
+  ok(!names.includes('Sam') && !names.includes('Grandma'), 'the ask list never has the owner or yourself: ' + names);
+  ok(list.data.people.find(p => p.name === 'Jane').going && list.data.people.find(p => p.name === 'Mary').asked, 'it says who is going in, and who was asked today');
+  ok(!JSON.stringify(list.data).includes('@'), 'no email addresses leave the server');
+  a = await sam.op({ op: 'askChip', itemId: scope, people: [ids.Mary] });
+  ok(a.status === 403, 'the owner cannot ask anyone');
+  ok((await sam.call(`/api/lists/ask?item=${scope}`)).status === 404, 'nor see who could be asked');
+  await john.op({ op: 'saveMailPrefs', chipMail: false });
+  ok((await john.data()).data.me.chipMail === false, 'john turns these emails off');
+  r1 = await sam.op({ op: 'addItem', ownerId: ids.Sam, title: 'Kayak', price: '600', qty: 1 });
+  const kayak = r1.data.id;
+  a = await grandma.op({ op: 'askChip', itemId: kayak, people: [johnId, ids.Jane] });
+  ok(a.data.notified.join() === 'Jane' && a.data.skipped[0].name === 'John' && a.data.skipped[0].why === 'off', 'john is not emailed; jane is');
+  await john.op({ op: 'saveMailPrefs', chipMail: true });
+  // A kid's list with purchases hidden from the parents: the parents are never asked.
+  r1 = await jane.op({ op: 'addItem', ownerId: ids.Ella, title: 'Bike', price: '200', qty: 1 });
+  const bike = r1.data.id;
+  a = await grandma.op({ op: 'askChip', itemId: bike, people: [ids.Jane] });
+  ok(a.status === 400, 'jane keeps Ella\'s list with purchases hidden, so she is never asked about Ella\'s gifts');
+  await sam.op({ op: 'removeItem', id: scope });
+  await sam.op({ op: 'removeItem', id: kayak });
+  await jane.op({ op: 'removeItem', id: bike });
+}
+
+// Gift history: what you gave, kept after the gift leaves the list, seen only by the giver.
+{
+  let r1 = await sam.op({ op: 'addItem', ownerId: ids.Sam, title: 'Wool hat', price: '20', qty: 2 });
+  const hat = r1.data.id;
+  const hb = await grandma.op({ op: 'buy', itemId: hat, qty: 1 });
+  await grandma.op({ op: 'given', buyId: hb.data.shopping.buys.find(x => x.itemId === hat).id });
+  let h = (await grandma.data()).data.history;
+  ok(h.some(x => x.title === 'Wool hat' && x.ownerName === 'Sam'), 'a given gift is in the giver\'s history');
+  r1 = await sam.op({ op: 'removeItem', id: hat });
+  ok(r1.status === 200 && !r1.data.items.some(i => i.id === hat), 'sam takes the hat off his list');
+  h = (await grandma.data()).data.history;
+  ok(h.some(x => x.title === 'Wool hat' && x.ownerName === 'Sam'), 'the history outlives the gift leaving the list');
+  ok(!(await sam.data()).data.history.some(x => x.title === 'Wool hat'), 'sam is not shown what he was given');
+  ok(!(await jane.data()).data.history.some(x => x.title === 'Wool hat'), 'only the giver sees their history');
+}
+
 // Asking to join, from the sign-in page. John stays the gatekeeper.
 {
   const anon = new User('');
@@ -759,6 +828,17 @@ const mary = new User('mary@example.com'), carlos = new User('carlos@example.com
       catch (e) { ok(false, 'this kid draw should go ahead: ' + e.message); }
     }
     ok(seen === 0, 'a kid never draws someone hidden from one of the kid\'s parents');
+  }
+
+  // Clearing away an old given gift keeps a record of it in the giver's history.
+  {
+    const giver = { id: 'giverperson1', name: 'G', email: 'g@example.com' }, owner = { id: 'ownerperson1', name: 'O', email: 'o@example.com' };
+    const old = Date.now() - 400 * 864e5;
+    const st = { people: [giver, owner], items: [{ id: 'olditem001', ownerId: owner.id, title: 'Old gift', qty: 1, store: '', priceCents: 1000 }],
+      buys: [{ id: 'oldbuy0001', itemId: 'olditem001', buyerId: giver.id, qty: 1, at: old, givenAt: old }], chips: [], draws: [], history: [], notes: [], settings: {} };
+    rules.tidy(st);
+    ok(!st.items.length && st.history.length === 1 && st.history[0].title === 'Old gift' && st.history[0].giverId === giver.id && st.history[0].ownerName === 'O',
+      'clearing an old given gift keeps it in history: ' + JSON.stringify(st.history));
   }
 
   // Limits: the owner's own count never includes secret ideas, so it cannot reveal them.

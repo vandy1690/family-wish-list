@@ -448,10 +448,20 @@
       hint ? el('p', { class: 'sdc-field__hint', id: hintId }, hint) : null);
   }
 
-  function choice({ name, value, label, checked, radio = true, onchange }) {
+  function choice({ name, value, label, checked, radio = true, onchange, disabled }) {
     return el('label', { class: 'sdc-choice' },
-      el('input', { type: radio ? 'radio' : 'checkbox', name, value, checked: Boolean(checked), onchange }),
+      el('input', { type: radio ? 'radio' : 'checkbox', name, value, checked: Boolean(checked), onchange, disabled: Boolean(disabled) }),
       el('span', null, label));
+  }
+
+  // A message passed on from the person's own phone or computer: a text, WhatsApp (for family
+  // abroad) or an email. Three links, each with the message already written in.
+  function sendYourself(subject, message) {
+    return el('div', { class: 'wl-actions' },
+      el('a', { class: 'sdc-btn', href: `sms:?&body=${encodeURIComponent(message)}`, id: 'sendText' }, 'Send a text'),
+      el('a', { class: 'sdc-btn', href: `https://wa.me/?text=${encodeURIComponent(message)}`, target: '_blank', rel: 'noopener noreferrer', id: 'sendWhatsApp' },
+        'Send on WhatsApp', el('span', { class: 'sdc-u-sr-only' }, ' (opens WhatsApp)')),
+      el('a', { class: 'sdc-btn', href: `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(message)}`, id: 'sendEmail' }, 'Send an email'));
   }
 
   // Takes a field's error away as soon as it is fixed, without redrawing the form under the cursor.
@@ -571,11 +581,11 @@
 
     // Sending the list by text or email: an installed app has no address bar to copy from.
     const sendLinks = quiet ? el('div', { class: 'wl-actions wl-actions--links' },
-      linkBtn('Share by text or email', () => openSend(owner), { id: 'sendBtn' })) : null;
+      linkBtn('Share by text, WhatsApp or email', () => openSend(owner), { id: 'sendBtn' })) : null;
     const main = el('div', { class: 'wl-main' }, pick,
       el('header', { class: 'wl-listhead' },
         el('div', null, pageH(listName(owner)), el('p', { class: 'wl-sub' }, lede),
-          keptByLine(owner),
+          keptByLine(owner), gaveBefore(owner),
           keptKid ? el('p', { class: 'wl-sub' }, sharedText(owner)) : null, ownShare, kidLinks, sendLinks),
         S.form && S.form.kind === 'add' ? null : btn(addLabel, () => openAdd(owner.id), true, { id: 'addBtn' })));
     // The side list comes after the list in the page, so a screen reader meets the heading first.
@@ -792,21 +802,29 @@
     const link = `${ORIGIN}/lists?list=${encodeURIComponent(owner.id)}`;
     const line = `Here is ${whose} on the ${title}: ${link}`;
     const how = 'Sign in with your email address. There is no password.';
-    const text = `sms:?&body=${encodeURIComponent(`${line}\n${how}`)}`;
-    const mail = `mailto:?subject=${encodeURIComponent(whose.charAt(0).toUpperCase() + whose.slice(1))}`
-      + `&body=${encodeURIComponent(`${line}\n\n${how} If it does not open, ask ${S.data.site.adminName} to add you.`)}`;
+    const subject = whose.charAt(0).toUpperCase() + whose.slice(1);
     const limited = Array.isArray(owner.audience);
+    const links = sendYourself(subject, `${line}\n\n${how} If it does not open, ask ${S.data.site.adminName} to add you.`);
+    links.querySelector('#sendText').classList.add('sdc-btn--primary');
     return el('section', { class: 'wl-form', 'aria-labelledby': 'sendH' },
-      el('h2', { class: 'sdc-subhead', id: 'sendH' }, 'Share by text or email'),
+      el('h2', { class: 'sdc-subhead', id: 'sendH' }, 'Share by text, WhatsApp or email'),
       el('p', null, `Your phone or computer opens a new message with a link to ${whose}. You pick who it goes to.`),
       el('p', { class: 'wl-hint' }, limited
         ? `${yours ? 'Your' : possessive(owner.name)} list is shared with only some people, so the link opens only for them. Anyone else sees the sign-in page.`
         : keeps(owner.rel) ? 'The link opens for anyone on the wish list after they sign in. Anyone else sees the sign-in page.'
         : 'The link opens for people on the wish list who can see this list, after they sign in. Anyone else sees the sign-in page.'),
-      el('div', { class: 'wl-actions' },
-        el('a', { class: 'sdc-btn sdc-btn--primary', href: text, id: 'sendText' }, 'Send a text'),
-        el('a', { class: 'sdc-btn', href: mail, id: 'sendEmail' }, 'Send an email'),
-        btn('Done', closeLayer)));
+      links,
+      el('div', { class: 'wl-actions' }, btn('Done', closeLayer)));
+  }
+
+  // On someone's list: what you gave them before, so nothing is given twice.
+  function gaveBefore(owner) {
+    if (owner.rel === 'own' || hides(owner.rel)) return null;
+    const mine = (S.data.history || []).filter(h => h.ownerId === owner.id);
+    if (!mine.length) return null;
+    const shown = mine.slice(0, 3).map(h => `${h.title} (${new Date(h.at).getFullYear()})`);
+    const more = mine.length > 3 ? `, and ${mine.length - 3} more in My shopping` : '';
+    return el('p', { class: 'wl-sub' }, `You gave ${owner.name} before: ${joinNames(shown)}${more}.`);
   }
 
   // ------------------------------------------------------------ Draw names
@@ -1112,7 +1130,11 @@
     if (tags.length) body.append(el('p', { class: 'wl-detail__tags' }, tags));
     if (shopper) {
       for (const b of it.buys) {
-        body.append(el('p', { class: 'wl-detail__fact' }, `${b.mine ? 'You' : b.buyer} marked ${b.qty > 1 ? b.qty : 'it'} bought on ${day(b.at)}.`));
+        // Undo sits with your own purchase line, not among the buttons.
+        body.append(el('p', { class: 'wl-detail__fact' }, `${b.mine ? 'You' : b.buyer} marked ${b.qty > 1 ? b.qty : 'it'} bought on ${day(b.at)}. `,
+          b.mine ? linkBtn(b.qty > 1 ? 'Undo, I did not buy them' : 'Undo, I did not buy it',
+            () => change({ op: 'unbuy', buyId: b.id }, 'Undone. It is back to not bought.').then(ok => { if (ok) { S.focus = '#pageH'; draw(); } }),
+            { id: 'undoBuy' }) : null));
       }
       const mineBuy = it.buys.find(b => b.mine);
       if (mineBuy && mineBuy.changed && it.was) body.append(el('p', { class: 'wl-detail__fact' }, wasText(it.was)));
@@ -1138,25 +1160,31 @@
     if (href) out.push(linkCheckBox(it.linkCheck, 'page'));
     if (shopper) {
       const mine = it.buys.find(b => b.mine);
-      if (href && !it.removed && it.need > 0) {
-        out.push(ext(shopLabel('Buy it', it.store), !mine));
-        out.push(el('p', { class: 'wl-hint' }, 'The store opens in a new tab. After you buy it, come back here and tap I bought this.'));
-      }
-      if (!it.removed && it.need > 0) {
-        out.push(btn(mine ? 'I bought more' : 'I bought this', it.need === 1 && !mine ? () => buy(it, 1) : open('buy', '#buyBtn'), !href && !mine, { id: 'buyBtn' }));
-      }
+      const wanted = !it.removed && it.need > 0;
       if (mine) {
-        out.push(btn('It has been given', open('given', '#givenBtn'), false, { id: 'givenBtn' }));
-        out.push(btn(mine.qty > 1 ? 'Undo, I did not buy them' : 'Undo, I did not buy it',
-          () => change({ op: 'unbuy', buyId: mine.id }, 'Undone. It is back to not bought.').then(ok => { if (ok) { S.focus = '#pageH'; draw(); } })));
+        // After you buy, there is one main button: the next step.
+        out.push(btn('It has been given', open('given', '#givenBtn'), true, { id: 'givenBtn' }));
+        if (wanted) out.push(btn('I bought more', open('buy', '#buyBtn'), false, { id: 'buyBtn' }));
+      } else {
+        if (href && wanted) {
+          out.push(ext(shopLabel('Buy it', it.store), true));
+          out.push(el('p', { class: 'wl-hint' }, 'The store opens in a new tab. After you buy it, come back here and tap I bought this.'));
+        }
+        if (wanted) out.push(btn('I bought this', it.need === 1 ? () => buy(it, 1) : open('buy', '#buyBtn'), !href, { id: 'buyBtn' }));
       }
-      if (!it.removed && it.need > 0) {
+      if (wanted) {
         out.push(btn(it.chips.some(c => c.mine) ? 'Change my amount' : 'Go in together', () => openLayer('chip', () => {
           const mineChip = it.chips.find(c => c.mine);
           S.panel = 'chip';
           S.chip = { value: mineChip ? String(mineChip.cents / 100) : '', error: null };
           S.focus = '#p-chip';
         }, '#chipBtn'), false, { id: 'chipBtn' }));
+        out.push(btn('Ask others to go in', () => openAsk(it), false, { id: 'askBtn' }));
+      }
+      // The store, still a tap away once you have bought it, as a plain link.
+      if (mine && href && wanted) {
+        out.push(el('p', null, el('a', { class: 'wl-linkbtn', href, target: '_blank', rel: 'noopener noreferrer' },
+          shopLabel('Open it', it.store), el('span', { class: 'sdc-u-sr-only' }, ' (opens in a new tab)'))));
       }
     } else if (href) {
       out.push(ext(shopLabel('See it', it.store)));
@@ -1208,9 +1236,8 @@
         if (raw && !/^\d+(\.\d{1,2})?$/.test(raw)) { c.error = 'Type an amount in dollars, like 25.'; S.focus = '#p-chip'; draw(); return; }
         c.error = null;
         const off = !raw || Number(raw) === 0;
-        const ok = await change({ op: 'chip', itemId: it.id, amount: off ? 0 : raw },
-          off ? 'Your amount was taken off.' : 'Saved. Whoever buys it taps I bought this.');
-        if (ok) closeLayer();
+        const d = await change({ op: 'chip', itemId: it.id, amount: off ? 0 : raw });
+        if (d) { closeLayer(); say(chipSaid(off, d.notified), 'success'); }
       } },
       el('p', null, `Say how much you will put toward this. Everyone shopping for ${owner.name} sees the total. ${owner.name} never does. One of you buys it and taps I bought this.`),
       field({ id: 'p-chip', label: 'How much will you put in? (dollars)', value: c.value, error: c.error,
@@ -1218,12 +1245,66 @@
         oninput: e => { c.value = e.target.value; } }),
       el('button', { class: 'sdc-btn sdc-btn--primary', type: 'submit' }, 'Save my amount'),
       had ? btn('Take my amount off', async () => {
-        const ok = await change({ op: 'chip', itemId: it.id, amount: 0 }, 'Your amount was taken off.');
-        if (ok) closeLayer();
+        const d = await change({ op: 'chip', itemId: it.id, amount: 0 });
+        if (d) { closeLayer(); say(chipSaid(true, d.notified), 'success'); }
       }) : null,
       btn('Cancel', closeLayer));
     }
+    if (S.panel === 'ask') return askPanel(it, owner);
     return el('div');
+  }
+
+  // What going in together just did, including who was emailed about it.
+  const chipSaid = (off, told) => (off ? 'Your amount was taken off.' : 'Saved. Whoever buys it taps I bought this.')
+    + (told && told.length ? ` ${joinNames(told)} ${told.length === 1 ? 'gets' : 'get'} an email about it.` : '');
+
+  // ------------------------------------------------------------ asking others to go in
+  // Pick people and the wish list emails them a link to the gift. Only people who could go in are
+  // listed (never the person it is for). Or pass it on yourself, by text, WhatsApp or email.
+
+  function openAsk(it) {
+    openLayer('ask', () => { S.panel = 'ask'; S.ask = { itemId: it.id, people: null, picked: [], error: null }; S.focus = '#askH'; }, '#askBtn');
+    api(`/ask?item=${encodeURIComponent(it.id)}`).then(r => {
+      if (!S.ask || S.ask.itemId !== it.id) return;
+      S.ask.people = r.ok ? r.data.people : [];
+      redrawInPlace();
+    });
+  }
+
+  function askPanel(it, owner) {
+    const a = S.ask || (S.ask = { itemId: it.id, people: [], picked: [], error: null });
+    const link = `${ORIGIN}/lists?item=${encodeURIComponent(it.id)}`;
+    const message = `Want to go in with me on the ${it.title} for ${owner.name}? ${link}\nSign in with your email address. ${owner.name} never sees this.`;
+    const why = p => (p.going ? ' (going in already)' : p.asked ? ' (asked today)' : p.off ? ' (turned these emails off)' : '');
+    const send = async () => {
+      if (!a.picked.length) { a.error = 'Pick at least one person to ask.'; S.focus = 'input[name="ask-who"]'; draw(); return; }
+      const d = await change({ op: 'askChip', itemId: it.id, people: a.picked });
+      if (!d) return;
+      const told = d.notified || [];
+      const later = (d.skipped || []).map(x => x.name);
+      closeLayer();
+      say((told.length ? `Asked ${joinNames(told)}. ${told.length === 1 ? 'They get' : 'Each gets'} an email with a link to this gift.` : 'Nobody new was asked.')
+        + (later.length ? ` ${joinNames(later)} could not be emailed right now.` : ''), 'success');
+    };
+    const people = a.people;
+    return el('div', { class: 'wl-confirm wl-askpanel', role: 'group', 'aria-labelledby': 'askH' },
+      el('h2', { class: 'sdc-subhead', id: 'askH', tabindex: '-1' }, 'Ask others to go in'),
+      el('p', null, `Pick who to ask. Each gets an email from the wish list with a link to this gift. ${owner.name} never sees it.`),
+      people === null ? el('p', { role: 'status' }, 'Finding who can go in…')
+        : people.length ? el('fieldset', { class: 'sdc-fieldset', 'aria-describedby': a.error ? 'ask-err' : null },
+          el('legend', { class: 'sdc-u-sr-only' }, 'Who to ask'),
+          el('div', { class: 'sdc-choice-set' }, people.map(p => choice({ name: 'ask-who', value: p.id, radio: false, label: p.name + why(p),
+            checked: a.picked.includes(p.id), disabled: p.going || p.asked || p.off,
+            onchange: e => {
+              a.picked = e.target.checked ? [...a.picked, p.id] : a.picked.filter(x => x !== p.id);
+              if (a.error && a.picked.length) { a.error = null; const x = $('ask-err'); if (x) x.remove(); }
+            } }))),
+          a.error ? el('p', { class: 'sdc-field__error', id: 'ask-err' }, a.error) : null)
+        : el('p', null, 'Nobody else can go in on this gift right now.'),
+      people && people.length ? btn('Email them', send, true, { id: 'askSend' }) : null,
+      el('p', { class: 'wl-hint' }, 'Or send it yourself:'),
+      sendYourself(`Go in on a gift for ${owner.name}?`, message),
+      btn('Done', closeLayer));
   }
 
   function chipBox(it, owner) {
@@ -1234,7 +1315,17 @@
       el('p', { class: 'sdc-subhead' }, 'Going in together'),
       el('p', null, of ? `${money(total)} of ${money(of)} so far` : `${money(total)} so far`),
       pct !== null ? el('div', { class: 'wl-meter', role: 'img', 'aria-label': `${pct} percent pledged` }, el('span', { style: `width:${pct}%` })) : null,
-      el('ul', null, it.chips.map(c => el('li', null, `${c.mine ? 'You' : c.person}: ${money(c.cents)}`))));
+      el('ul', null, it.chips.map(c => el('li', null, `${c.mine ? 'You' : c.person}: ${money(c.cents)} `, c.isNew ? tag('done', 'New') : null))),
+      seenChips(it));
+  }
+
+  // Opening a gift with someone new going in marks them seen, for next time.
+  function seenChips(it) {
+    if (it.chips.some(c => c.isNew) && S.sawChips !== it.id) {
+      S.sawChips = it.id;
+      api('/data', { op: 'sawChips', itemId: it.id });
+    }
+    return null;
   }
 
   async function buy(it, qty) {
@@ -1641,16 +1732,49 @@
         el('ul', { class: 'wl-rows' }, chips.map(c => {
           const p = person(c.ownerId);
           const what = `${money(c.cents)} toward ${c.title}`;
+          const sofar = c.priceCents ? `${money(c.total)} of ${money(c.priceCents)} so far` : `${money(c.total)} so far`;
           return el('li', { class: 'wl-row wl-row--plain' }, el('div', { class: 'wl-row__body' },
             el('p', null, c.hidden ? what : el('a', { class: 'wl-row__link', href: urlFor({ item: c.itemId }), 'data-nav': true }, what)),
-            el('p', { class: 'wl-row__meta' }, `For ${p ? p.name : c.ownerName || 'someone'}. You said so on ${day(c.at)}.`)));
+            el('p', { class: 'wl-row__meta' }, `For ${p ? p.name : c.ownerName || 'someone'}. You said so on ${day(c.at)}.`),
+            el('p', { class: 'wl-row__meta' }, c.others.length ? `With ${joinNames(c.others)}: ${sofar}.` : `Just you so far: ${sofar}.`),
+            c.newFrom.length ? el('p', { class: 'wl-tags' }, tag('done', `New: ${joinNames(c.newFrom)}`)) : null));
         }))));
     }
     if (given.length) {
       root.append(el('section', { class: 'wl-group' }, el('h2', { class: 'sdc-subhead' }, 'Given'),
         el('ul', { class: 'wl-rows' }, given.map(shopRow))));
     }
+    root.append(historyPanel(), mailPanel());
     return 'My shopping';
+  }
+
+  // Everything you gave, by person and year, so nobody gets the same thing twice.
+  function historyPanel() {
+    const all = S.data.history || [];
+    if (!all.length) return null;
+    const byPerson = new Map();
+    for (const h of all) { if (!byPerson.has(h.ownerName)) byPerson.set(h.ownerName, []); byPerson.get(h.ownerName).push(h); }
+    const names = [...byPerson.keys()].sort((a, b) => a.localeCompare(b));
+    return el('section', { class: 'wl-group', 'aria-labelledby': 'histH' },
+      el('h2', { class: 'sdc-subhead', id: 'histH' }, 'Gift history'),
+      el('p', { class: 'wl-sub' }, 'Everything you gave, so nobody gets the same thing twice. Only you see this.'),
+      el('div', { class: 'wl-history' }, names.map(n => el('section', { 'aria-label': `Gifts you gave ${n}` },
+        el('h3', { class: 'wl-history__name' }, n),
+        el('ul', null, byPerson.get(n).map(h => el('li', null, `${h.title}${h.qty > 1 ? ` (${h.qty})` : ''}, `,
+          el('span', { class: 'wl-history__when' }, new Date(h.at).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })))))))));
+  }
+
+  // Emails about going in together: on unless the person turns them off.
+  function mailPanel() {
+    return el('section', { class: 'wl-panel wl-panel--quiet', 'aria-labelledby': 'mailH' },
+      el('h2', { class: 'sdc-subhead', id: 'mailH' }, 'Emails about going in together'),
+      el('div', { class: 'sdc-choice-set' }, choice({ name: 'chip-mail', value: 'on', radio: false, checked: me().chipMail,
+        label: 'Email me when someone asks me to go in on a gift, or joins one I am going in on',
+        onchange: async e => {
+          const on = e.target.checked;
+          S.focus = 'input[name="chip-mail"]';
+          await change({ op: 'saveMailPrefs', chipMail: on }, on ? 'Saved. You will get these emails.' : 'Saved. You will not get these emails.');
+        } })));
   }
 
   function shopRow(b) {

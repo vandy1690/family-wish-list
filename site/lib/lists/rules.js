@@ -24,6 +24,9 @@ const EMAIL_RE = /^[^\s@]{1,64}@[^\s@.]+(\.[^\s@.]+)+$/;
 const DAY = 864e5;
 const KEEP_DONE_DAYS = 120;        // finished items and given gifts are kept this long, then pruned
 const SHOW_GIVEN_DAYS = 90;        // "My shopping" shows given gifts for this long
+const HOUR = 3600e3;
+const NOTE_MAIL_PER_DAY = 60;      // emails about going in together, for the whole wish list, a day
+const KEEP_HISTORY = 500;          // gifts kept in each giver's history
 
 export class OpError extends Error {
   constructor(code, message, status = 400) { super(message); this.code = code; this.status = status; }
@@ -166,6 +169,67 @@ function wasOf(it, left) {
   return Object.keys(out).length ? out : null;
 }
 
+// ---------------------------------------------------------------- going in together
+
+// Who could go in on a gift: a grown-up who can see it and shops that list. Never the person it
+// is for, and never parents kept from a kid's purchases.
+export function canChipIn(state, p, it) {
+  if (!p || !p.email || !seesItem(state, p, it)) return false;
+  return !hidesPurchases(relation(state, p, it.ownerId));
+}
+
+// Was this person sent this kind of note about this gift within `within` ms?
+const noted = (state, to, itemId, kind, now, within) =>
+  (state.notes || []).some(n => n.to === to && n.itemId === itemId && n.kind === kind && now - n.at < within);
+
+// The day's allowance of emails about going in together (Resend's free plan allows 100 a day).
+function mailBudget(state, now) {
+  const day = new Date(now).toISOString().slice(0, 10);
+  const m = state.settings && state.settings.noteMail;
+  const n = m && m.d === day ? m.n : 0;
+  if (n >= NOTE_MAIL_PER_DAY) return false;
+  state.settings = { ...(state.settings || {}), noteMail: { d: day, n: n + 1 } };
+  return true;
+}
+
+// The others going in on a gift are told when someone joins, changes their amount or drops out.
+// At most one such email per person per gift an hour; the "New" mark in the app shows the rest.
+function tellChippers(state, it, me, change, cents, now, outbox) {
+  const told = [];
+  for (const c of state.chips.filter(x => x.itemId === it.id && x.personId !== me.id)) {
+    const p = state.people.find(x => x.id === c.personId);
+    if (!p || p.chipMail === false || !canChipIn(state, p, it)) continue;
+    if (noted(state, p.id, it.id, 'update', now, HOUR) || !mailBudget(state, now)) continue;
+    state.notes.push({ to: p.id, itemId: it.id, kind: 'update', at: now });
+    outbox.push({ kind: 'update', to: p.id, itemId: it.id, from: me.id, change, cents });
+    told.push(p.name);
+  }
+  return told;
+}
+
+// ---------------------------------------------------------------- gift history
+// A given gift outlives its item: when a given purchase is cleared away, a short record of it
+// stays in the giver's history, so nobody gives the same thing twice.
+function archive(state, buys, now) {
+  state.history = state.history || [];
+  for (const b of buys) {
+    const at = givenTime(b, now);
+    if (!at) continue;
+    const it = state.items.find(i => i.id === b.itemId);
+    if (!it || state.history.some(h => h.id === b.id)) continue;
+    const owner = state.people.find(p => p.id === it.ownerId);
+    state.history.push({ id: b.id, giverId: b.buyerId, ownerId: it.ownerId, ownerName: owner ? owner.name : '',
+      title: it.title, store: it.store || '', priceCents: it.priceCents ?? null, qty: b.qty, at });
+  }
+  // Keep the newest KEEP_HISTORY for each giver.
+  const count = new Map();
+  state.history = [...state.history].sort((a, b) => b.at - a.at).filter(h => {
+    const n = (count.get(h.giverId) || 0) + 1;
+    count.set(h.giverId, n);
+    return n <= KEEP_HISTORY;
+  });
+}
+
 function itemTotals(state, item, now) {
   const buys = state.buys.filter(b => b.itemId === item.id);
   const given = buys.filter(b => isGiven(b, now));
@@ -242,8 +306,13 @@ export function view(state, me, now = Date.now()) {
         changed: Boolean(it.editedAt && it.editedAt > b.at)
       })),
       ...(t.open.some(b => it.editedAt && it.editedAt > b.at) && wasOf(it, t.left) ? { was: wasOf(it, t.left) } : {}),
-      chips: state.chips.filter(c => c.itemId === it.id)
-        .map(c => ({ id: c.id, person: nameOf(c.personId), mine: c.personId === me.id, cents: c.cents }))
+      chips: (() => {
+        // New to me: who went in, or changed their amount, since I joined or last opened this gift.
+        const mine = state.chips.find(c => c.itemId === it.id && c.personId === me.id);
+        const seenAt = Math.max(mine ? mine.joinedAt || mine.at : Infinity, (me.chipSeen && me.chipSeen[it.id]) || 0);
+        return state.chips.filter(c => c.itemId === it.id).map(c => ({ id: c.id, person: nameOf(c.personId), mine: c.personId === me.id,
+          cents: c.cents, at: c.at, isNew: c.personId !== me.id && c.at > seenAt }));
+      })()
     });
   }
 
@@ -270,8 +339,12 @@ export function view(state, me, now = Date.now()) {
     if (c.personId !== me.id) continue;
     const it = itemOf(c.itemId);
     if (!it) continue;
+    const seenAt = Math.max(c.joinedAt || c.at, (me.chipSeen && me.chipSeen[it.id]) || 0);
+    const others = state.chips.filter(x => x.itemId === it.id && x.personId !== me.id);
     shopping.chips.push({ id: c.id, itemId: it.id, ownerId: it.ownerId, ownerName: nameOf(it.ownerId), hidden: !sees(it.ownerId),
-      title: it.title, cents: c.cents, at: c.at });
+      title: it.title, cents: c.cents, at: c.at, total: others.reduce((n, x) => n + x.cents, c.cents),
+      priceCents: it.priceCents ?? null, others: others.map(x => nameOf(x.personId)),
+      newFrom: others.filter(x => x.at > seenAt).map(x => nameOf(x.personId)) });
   }
 
   // Name draws this person is part of: as a giver, as the parent of a kid giver, or as the
@@ -301,7 +374,17 @@ export function view(state, me, now = Date.now()) {
 
   return {
     me: { id: me.id, name: me.name, admin: Boolean(me.admin), about: me.about || '',
-      setup: me.setup || null, tour: me.tour || null },
+      setup: me.setup || null, tour: me.tour || null, chipMail: me.chipMail !== false },
+    // What this person gave, newest first: their history, plus gifts given and not yet cleared.
+    history: [
+      ...(state.history || []).filter(h => h.giverId === me.id),
+      ...state.buys.filter(b => b.buyerId === me.id && givenTime(b, now)).map(b => {
+        const it = itemOf(b.itemId);
+        return it ? { id: b.id, ownerId: it.ownerId, ownerName: nameOf(it.ownerId), title: it.title, store: it.store || '',
+          priceCents: it.priceCents ?? null, qty: b.qty, at: givenTime(b, now) } : null;
+      }).filter(Boolean)
+    ].map(h => ({ ...h, ownerName: state.people.some(p => p.id === h.ownerId) ? nameOf(h.ownerId) : h.ownerName || 'Someone' }))
+      .sort((a, b) => b.at - a.at),
     people, members, items, shopping, draws, now,
     // Requests to join, from the sign-in page. Only the admin sees them.
     ...(me.admin ? { requests: (state.requests || []).map(r => ({ id: r.id, name: r.name, email: r.email, note: r.note || '', at: r.at })) } : {}),
@@ -359,6 +442,13 @@ export function validate(body) {
       if (cents === null) throw new OpError('invalid', 'Enter an amount in dollars, like 25.');
       return { op, itemId: needId(body.itemId), cents };
     }
+    case 'askChip': {
+      const people = Array.isArray(body.people) ? [...new Set(body.people.filter(isId))].slice(0, 20) : [];
+      if (!people.length) throw new OpError('invalid', 'Pick at least one person to ask.');
+      return { op, itemId: needId(body.itemId), people };
+    }
+    case 'sawChips': return { op, itemId: needId(body.itemId) };
+    case 'saveMailPrefs': return { op, chipMail: Boolean(body.chipMail) };
     case 'saveAbout': return { op, personId: needId(body.personId, 'person'), about: multiLine(body.about, LIMITS.about) };
     case 'savePerson': {
       const name = oneLine(body.name, LIMITS.name);
@@ -435,6 +525,9 @@ export function validate(body) {
 // ideas for them, what was bought from it, and what they bought or pledged elsewhere.
 function dropPerson(state, id) {
   const theirs = new Set(state.items.filter(i => i.ownerId === id).map(i => i.id));
+  // Gifts others already gave this person stay in the givers' history.
+  archive(state, state.buys.filter(b => theirs.has(b.itemId) && b.buyerId !== id), Date.now());
+  state.history = (state.history || []).filter(h => h.giverId !== id);
   state.people = state.people.filter(p => p.id !== id);
   // A kid left with no parent cannot be reached; the admin sees "no parent" and can fix it.
   for (const p of state.people) if (Array.isArray(p.managers)) p.managers = p.managers.filter(m => m !== id);
@@ -569,7 +662,9 @@ export function matchRoom(ids, options, pairs) {
   return { choices, onlyTwo: loops.length === 1 && arrows.get(loops[0]) === size.get(loops[0]) };
 }
 
-export function apply(state, op, me, now = Date.now()) {
+// `outbox` collects the emails a change should send; the data route sends them after saving.
+export function apply(state, op, me, now = Date.now(), outbox = []) {
+  state.notes = state.notes || [];
   const item = id => state.items.find(i => i.id === id);
   const person = id => state.people.find(p => p.id === id);
   const boss = siteInfo(state).adminName;
@@ -651,6 +746,7 @@ export function apply(state, op, me, now = Date.now()) {
       // owner gets exactly the same answer either way, so nothing is given away.
       const open = state.buys.some(b => b.itemId === it.id && !isGiven(b, now));
       if (open) { it.removedAt = now; return it.id; }
+      archive(state, state.buys.filter(b => b.itemId === it.id), now);
       state.items = state.items.filter(i => i.id !== it.id);
       state.buys = state.buys.filter(b => b.itemId !== it.id);
       state.chips = state.chips.filter(c => c.itemId !== it.id);
@@ -689,12 +785,53 @@ export function apply(state, op, me, now = Date.now()) {
       if (!it || !seen(it)) throw NOT_FOUND();
       shoppable(it);
       const mine = state.chips.find(c => c.itemId === it.id && c.personId === me.id);
-      if (op.cents === 0) { state.chips = state.chips.filter(c => c !== mine); return null; }
+      if (op.cents === 0) {
+        if (!mine) return null;
+        const notified = tellChippers(state, it, me, 'left', 0, now, outbox);
+        state.chips = state.chips.filter(c => c !== mine);
+        return { id: null, notified };
+      }
       if (it.removedAt) throw new OpError('removed', 'This was taken off the list.', 409);
-      if (mine) { mine.cents = op.cents; mine.at = now; return mine.id; }
+      if (mine) {
+        if (mine.cents === op.cents) return { id: mine.id, notified: [] };
+        mine.cents = op.cents; mine.at = now;
+        return { id: mine.id, notified: tellChippers(state, it, me, 'changed', op.cents, now, outbox) };
+      }
       const id = newId();
-      state.chips.push({ id, itemId: it.id, personId: me.id, cents: op.cents, at: now });
-      return id;
+      state.chips.push({ id, itemId: it.id, personId: me.id, cents: op.cents, at: now, joinedAt: now });
+      return { id, notified: tellChippers(state, it, me, 'joined', op.cents, now, outbox) };
+    }
+    case 'askChip': {
+      // Ask chosen people to go in on a gift. Only people who could go in are asked, at most
+      // once a day per gift, and never anyone who turned these emails off.
+      const it = item(op.itemId);
+      if (!it || !seen(it)) throw NOT_FOUND();
+      shoppable(it);
+      if (it.removedAt) throw new OpError('removed', 'This was taken off the list.', 409);
+      if (itemTotals(state, it, now).need <= 0) throw new OpError('covered', 'Everything on this gift is already bought.', 409);
+      const notified = [], skipped = [];
+      for (const id of op.people) {
+        const p = person(id);
+        if (!p || p.id === me.id || !canChipIn(state, p, it)) continue;
+        if (p.chipMail === false) { skipped.push({ name: p.name, why: 'off' }); continue; }
+        if (noted(state, p.id, it.id, 'ask', now, DAY)) { skipped.push({ name: p.name, why: 'today' }); continue; }
+        if (!mailBudget(state, now)) { skipped.push({ name: p.name, why: 'limit' }); continue; }
+        state.notes.push({ to: p.id, itemId: it.id, kind: 'ask', at: now });
+        outbox.push({ kind: 'ask', to: p.id, itemId: it.id, from: me.id });
+        notified.push(p.name);
+      }
+      if (!notified.length && !skipped.length) throw new OpError('invalid', 'None of those people can go in on this gift.');
+      return { id: it.id, notified, skipped };
+    }
+    case 'sawChips': {
+      const p = person(me.id);
+      const kept = Object.entries(p.chipSeen || {}).filter(([id]) => state.items.some(i => i.id === id));
+      p.chipSeen = Object.fromEntries([...kept, [op.itemId, now]].slice(-200));
+      return null;
+    }
+    case 'saveMailPrefs': {
+      person(me.id).chipMail = op.chipMail;
+      return null;
     }
     case 'saveAbout': {
       const p = person(op.personId);
@@ -886,7 +1023,10 @@ export function tidy(state, now = Date.now()) {
     const last = buys.reduce((t, b) => Math.max(t, givenTime(b, now) || 0), it.removedAt || 0);
     if ((it.removedAt || given >= it.qty) && last && last < cutoff) drop.add(it.id);
   }
+  // Notes about emails sent are only needed for a day.
+  if (Array.isArray(state.notes)) state.notes = state.notes.filter(n => now - n.at < 2 * DAY);
   if (drop.size) {
+    archive(state, state.buys.filter(b => drop.has(b.itemId)), now);
     state.items = state.items.filter(i => !drop.has(i.id));
     state.buys = state.buys.filter(b => !drop.has(b.itemId));
     state.chips = state.chips.filter(c => !drop.has(c.itemId));

@@ -23,7 +23,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 // Left on, every save fails while reads work.
 const strongEtag = e => (typeof e === 'string' ? e.replace(/^W\//, '') : e);
 
-export const emptyState = () => ({ rev: 0, people: [], items: [], buys: [], chips: [], requests: [], draws: [], settings: {} });
+export const emptyState = () => ({ rev: 0, people: [], items: [], buys: [], chips: [], requests: [], draws: [], history: [], notes: [], settings: {} });
 
 function normalize(raw) {
   const s = raw && typeof raw === 'object' ? raw : {};
@@ -32,6 +32,7 @@ function normalize(raw) {
     rev: Number.isInteger(s.rev) && s.rev >= 0 ? s.rev : 0,
     people: list(s.people), items: list(s.items), buys: list(s.buys), chips: list(s.chips),
     requests: list(s.requests), draws: list(s.draws).filter(d => Array.isArray(d.participants)),
+    history: list(s.history), notes: list(s.notes),
     settings: s.settings && typeof s.settings === 'object' && !Array.isArray(s.settings) ? s.settings : {}
   };
 }
