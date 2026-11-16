@@ -90,6 +90,7 @@ Big stores (Amazon, Target, LEGO, REI, Etsy, Best Buy) do not let apps read thei
 
 - **The store button** reads the product page you are already looking at, in your own browser, and brings its name, photo and price to your list.
 - **A pasted link** still gets a name when the store says no: most store links carry the product name in the address itself, so the app reads it from the link without contacting the store.
+- **No picture from the store?** A question appears right under the link: choose a photo (a screenshot works), or paste a link to a picture, which is tried first to make sure it shows. If you have moved on while the link is looked up, the page stays where you are.
 
 <p>
   <img src="docs/screens/setup-phone.png" width="250" alt="The first setup screen on a phone">

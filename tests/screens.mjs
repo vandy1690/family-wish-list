@@ -195,6 +195,15 @@ await shot(john, '24-link-warning-form', `/lists?list=${id.John}`, { width: 390,
 } });
 for (const theme of ['light', 'dark']) await shot(john, '25-link-warning-item', `/lists?item=${lookalike}`, { theme, width: 390, height: 844 });
 await shot(john, '25-link-warning-list', `/lists?list=${id.Ben}`);
+// No picture from the store: the question right under the link.
+for (const theme of ['light', 'dark']) {
+  await shot(john, '27-photo-ask', `/lists?list=${id.John}`, { theme, width: 390, height: 844, act: async p => {
+    await p.getByRole('button', { name: 'Add a gift' }).click();
+    await p.getByLabel('Store link (optional)').fill('https://127.0.0.1:9/p/knit-beanie');
+    await p.getByRole('button', { name: 'Get details from the link' }).click();
+    await p.locator('#fa-box').waitFor();
+  } });
+}
 // Sending a list by text or email.
 for (const [width, theme] of [[390, 'light'], [1280, 'dark']]) {
   await shot(U.Sam, '26-send-list', '/lists', { width, theme, height: width === 390 ? 844 : 900, act: async p => {

@@ -14,7 +14,7 @@ const WHY = {
   unreachable: 'That store did not answer. Check the link, or try again later.'
 };
 const TIP = ' Use the Add to Wish List button on the store\'s page instead, or type the details in.';
-const GUESSED = ' The name was filled in from the link. Check it, and add a price or photo if you like.';
+const GUESSED = ' The name was filled in from the link. Check it, and add a price if you like.';
 
 export async function POST(request) {
   if (!isSameSiteJson(request)) return json(BAD, 400);

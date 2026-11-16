@@ -1344,12 +1344,14 @@
         oninput: e => {
           set('url')(e);
           if (f.urlError) { f.urlError = null; clearError(e.target); }
-          // The note about the old link no longer applies.
+          // The note about the old link no longer applies, and neither does the photo question.
           if (f.check) { f.check = null; dropCheck(e.target); }
+          if (f.photoAsk || f.photoAdded) { f.photoAsk = null; f.photoLink = null; f.photoAdded = false; const box = $('fa-box'); if (box) box.remove(); }
         },
         onchange: () => { if (/^\S+\.\S+/.test((v.url || '').trim()) && v.url.trim() !== f.looked) lookup(true); },
         addon: btn('Get details from the link', () => lookup(false), false, { id: 'f-lookup' }) }),
       linkCheckBox(f.check, 'form'),
+      photoAskBox(f),
       field({ id: 'f-title', label: 'What is it?', value: v.title, required: true,
         attrs: { maxlength: 200, autocomplete: 'off' }, error: f.error || null,
         hint: 'For example: LEGO Batmobile, or Aunt Suzy\'s cinnamon rolls',
@@ -1364,8 +1366,8 @@
         selectField({ id: 'f-qty', label: 'How many', value: v.qty || '1',
           options: Array.from({ length: 10 }, (_, i) => ({ value: String(i + 1), label: String(i + 1) })), onchange: set('qty') })),
       giftAudienceField(f, owner),
-      el('details', { class: 'wl-more', open: more, ontoggle: e => { f.moreOpen = e.target.open; } },
-        el('summary', null, src ? 'Photo' : 'Add a photo (optional)'),
+      el('details', { class: 'wl-more', id: 'f-more', open: more, ontoggle: e => { f.moreOpen = e.target.open; } },
+        el('summary', { id: 'f-more-sum' }, src ? 'Photo' : 'Add a photo (optional)'),
         el('div', { class: 'wl-form' },
           el('div', { class: 'sdc-field' },
             el('span', { class: 'sdc-field__label', id: 'f-photo-label' }, 'Photo'),
@@ -1431,12 +1433,23 @@
     if (!f) return;
     const url = (f.values.url || '').trim();
     if (!url) { if (!auto) { say('Paste a store link first.', 'error'); S.focus = '#f-url'; draw(); } return; }
+    // Leaving the link field starts a lookup, and pressing the button right after would start a
+    // second one. The press joins the one already running instead.
+    if (f.lookingUp === url) { if (!auto) f.pressed = true; return; }
+    f.lookingUp = url;
+    f.pressed = !auto;
     f.looked = url;
     say('Looking up that link…');
+    // The button stays focusable while it works (disabling it would drop focus to the page).
     const b = $('f-lookup');
-    if (b) b.disabled = true;
+    if (b) b.setAttribute('aria-busy', 'true');
     const r = await api('/lookup', { url });
-    if (!S.form) return;
+    if (S.form === f) f.lookingUp = null;
+    if (!S.form || S.form !== f) return;
+    auto = !f.pressed;
+    // If the person has moved on (say, scrolled down to the photo) while this ran, the page stays
+    // where they are. Only a press of Get details moves focus, to the next thing to do.
+    const movedOn = auto && !['f-url', 'f-lookup'].includes(document.activeElement && document.activeElement.id);
     S.form.check = r.data && r.data.check ? r.data.check : null;
     const checkSays = !S.form.check || S.form.check.level === 'ok' ? ''
       : S.form.check.level === 'danger' ? ' This link looks unsafe: read the note under Store link.' : ' Read the note under Store link before you add it.';
@@ -1461,12 +1474,104 @@
       if (g && g.title && !typed.title && (!auto || !v.title)) { v.title = g.title; S.form.error = null; }
       say((r.data.message || 'That link could not be read. Type the details in.') + checkSays, tone(g && g.title ? 'success' : 'warning'));
     }
-    S.focus = '#f-title';
+    // No picture came back: offer to add one right here, under the link. A link that leads
+    // nowhere (missing) gets no offer: the link itself needs fixing first.
+    const blocked = r.data && r.data.blocked;
+    S.form.photoAdded = false;
+    S.form.photoAsk = S.form.values.image || blocked === 'missing' || (!r.ok && !blocked) ? null
+      : ['robots', 'refused', 'empty'].includes(blocked) ? 'blocked' : 'none';
+    if (movedOn) { redrawInPlace(); return; }
+    S.focus = S.form.photoAsk ? '#fa-file' : '#f-title';
     draw();
   }
 
+  // Redraw without moving the page under the person. Whatever has focus, or else whatever sits
+  // in the middle of the screen, stays at the same spot on screen.
+  function redrawInPlace() {
+    let anchor = null;
+    const a = document.activeElement;
+    if (a && a.id && $('view').contains(a)) anchor = a.id;
+    else {
+      for (let n = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2); n && n.id !== 'view'; n = n.parentElement) {
+        if (n.id) { anchor = n.id; break; }
+      }
+    }
+    const before = anchor ? $(anchor).getBoundingClientRect().top : null;
+    const y = window.scrollY;
+    draw();
+    const now = anchor && $(anchor);
+    if (now && before !== null) window.scrollBy({ top: now.getBoundingClientRect().top - before, behavior: 'instant' });
+    else window.scrollTo({ top: y, behavior: 'instant' });
+  }
+
+  // Right under the link, when the store gave no picture: add one without scrolling down to
+  // the photo section. A photo from the phone or computer, or a link to a picture.
+  function photoAskBox(f) {
+    const v = f.values;
+    const src = imgSrc(v.image);
+    if (f.photoAdded && src) {
+      return el('div', { class: 'wl-confirm wl-photoask', id: 'fa-box', tabindex: '-1' },
+        el('img', { class: 'wl-photoask__thumb', src, alt: 'The photo for this gift', referrerpolicy: 'no-referrer' }),
+        el('p', null, 'Photo added. It shows on the gift.'));
+    }
+    if (!f.photoAsk || src) return null;
+    const why = f.photoAsk === 'blocked' ? 'This store blocks its picture.' : 'This store page did not share a picture.';
+    return el('div', { class: 'wl-confirm wl-photoask', id: 'fa-box', role: 'group', 'aria-labelledby': 'fa-q' },
+      el('p', { id: 'fa-q' }, `${why} Would you like to add one yourself?`),
+      // The same picker pattern as the photo section: the input takes focus, its label looks
+      // like the button, and tapping the label opens the picker on every phone.
+      el('input', { class: 'wl-file', type: 'file', id: 'fa-file', accept: 'image/*', 'aria-labelledby': 'fa-choose',
+        onchange: e => upload(e.target.files && e.target.files[0], 'ask') }),
+      el('label', { class: 'sdc-btn sdc-btn--primary', for: 'fa-file', id: 'fa-choose' }, 'Choose a photo'),
+      f.photoLink ? photoLinkField(f)
+        : btn('Use a link to a picture', () => { f.photoLink = { value: '', error: null }; S.focus = '#fa-url'; redrawInPlace(); }, false, { id: 'fa-link' }),
+      el('p', { class: 'wl-hint' }, 'A screenshot of the store page works too.'),
+      linkBtn('No thanks', () => { f.photoAsk = null; f.photoLink = null; S.focus = '#f-title'; draw(); }, { id: 'fa-no' }));
+  }
+
+  // A link straight to a picture. Checked by loading it first, since some stores stop their
+  // pictures from showing on other sites.
+  function photoLinkField(f) {
+    const p = f.photoLink;
+    const use = async () => {
+      let url = (p.value || '').trim().replace(/^http:/i, 'https:');
+      if (!/^https:\/\/[^\s/]+\.[^\s]+$/i.test(url)) {
+        p.error = 'Paste the whole link to the picture, starting with https.';
+        S.focus = '#fa-url'; redrawInPlace(); return;
+      }
+      say('Checking the picture…');
+      const loads = await new Promise(done => {
+        const img = new Image();
+        img.referrerPolicy = 'no-referrer';
+        const timer = setTimeout(() => done(false), 8000);
+        img.onload = () => { clearTimeout(timer); done(img.naturalWidth > 0); };
+        img.onerror = () => { clearTimeout(timer); done(false); };
+        img.src = url;
+      });
+      if (!S.form || S.form !== f) return;
+      if (!loads) {
+        p.error = 'That picture did not load here. Save it or take a screenshot, then use Choose a photo.';
+        say('');
+        S.focus = '#fa-url'; redrawInPlace(); return;
+      }
+      f.values.image = url;
+      (f.typed ||= {}).image = true;
+      f.photoAsk = null; f.photoLink = null; f.photoAdded = true;
+      S.focus = '#fa-box';
+      say('Photo added.', 'success');
+      redrawInPlace();
+    };
+    const box = field({ id: 'fa-url', label: 'Link to the picture', type: 'url', value: p.value, error: p.error,
+      attrs: { inputmode: 'url', autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false' },
+      hint: 'On a computer, right-click the picture and choose Copy Image Address. On a phone it is easier to save the picture and use Choose a photo.',
+      oninput: e => { p.value = e.target.value; if (p.error) { p.error = null; clearError(e.target); } } });
+    // Enter here uses the picture; it must not send the whole gift form.
+    box.querySelector('input').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); use(); } });
+    return el('div', { class: 'wl-form' }, box, btn('Use this picture', use, false, { id: 'fa-use' }));
+  }
+
   // Shrink a photo to 900px on the phone before sending it, so uploads are quick.
-  async function upload(file) {
+  async function upload(file, from) {
     if (!file || !S.form) return;
     if (!/^image\//.test(file.type || 'image/')) { say('That file is not a photo.', 'error'); return; }
     say('Adding the photo…');
@@ -1495,6 +1600,13 @@
     S.form.values.image = r.data.image;
     (S.form.typed ||= {}).image = true;
     say('Photo added.', 'success');
+    if (from === 'ask') {
+      // Chosen from the question under the link: the thumbnail shows right there.
+      Object.assign(S.form, { photoAsk: null, photoLink: null, photoAdded: true });
+      S.focus = '#fa-box';
+      redrawInPlace();
+      return;
+    }
     S.focus = '#f-file';
     draw();
   }

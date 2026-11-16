@@ -2,6 +2,7 @@
 // browser the way people use them. People are seeded through the API; the steps under test
 // are all clicks and typing.
 import assert from 'node:assert/strict';
+import { PHOTOS } from './paths.mjs';
 import { chromium } from 'playwright';
 
 const BASE = process.argv[2];
@@ -235,8 +236,44 @@ const h1 = (p, name) => p.getByRole('heading', { level: 1, name }).waitFor();
   assert.ok(/number instead of a website name/.test(said) && /not secure/.test(said), 'says why: ' + said);
   assert.ok((await a.getByLabel('Store link').getAttribute('aria-describedby')).includes('f-url-check'), 'the warning is tied to the field');
   assert.ok(/This link looks unsafe/.test(await a.locator('#toastText').innerText()), 'and the message points to it');
+
+  // No picture came back, so the question to add one sits right under the link, with focus on it.
+  assert.ok((await a.locator('#fa-q').innerText()).includes('Would you like to add one yourself?'));
+  assert.equal(await a.evaluate(() => document.activeElement.id), 'fa-file', 'focus moves to Choose a photo, right there');
+  assert.equal(await a.getByRole('button', { name: 'Choose a photo' }).or(a.getByLabel('Choose a photo')).count() > 0, true);
+  await a.getByRole('button', { name: 'Use a link to a picture' }).click();
+  await a.getByLabel('Link to the picture').fill('not a link');
+  await a.getByRole('button', { name: 'Use this picture' }).click();
+  await a.locator('#fa-url-err', { hasText: 'Paste the whole link to the picture' }).waitFor();
+  await a.getByLabel('Link to the picture').fill('https://127.0.0.1:9/no-such-picture.png');
+  await a.getByLabel('Link to the picture').press('Enter');
+  await a.locator('#fa-url-err', { hasText: 'did not load here' }).waitFor();
+  assert.equal(await a.locator('.wl-card', { hasText: 'Threshold Fleece' }).count(), 0, 'Enter in the picture link does not send the gift form');
+  await a.locator('#fa-file').setInputFiles(`${PHOTOS}/snoopy.png`);
+  await a.locator('#toastText', { hasText: 'Photo added.' }).waitFor();
+  await a.locator('#fa-box img').waitFor();
+  assert.ok((await a.locator('#fa-box').innerText()).includes('Photo added. It shows on the gift.'));
+  step('No picture from the store: Choose a photo or a link to a picture, right under the link; a bad picture link says so');
   await a.getByLabel('Store link').fill('https://www.lego.com/en-us/product/millennium-falcon-75192');
   assert.equal(await box.count(), 0, 'changing the link takes the old warning away');
+  assert.equal(await a.locator('#fa-box').count(), 0, 'and the photo note about the old link');
+  await a.getByRole('button', { name: 'Cancel' }).click();
+
+  // Moving on while a pasted link is looked up: the page stays where the person is.
+  await a.getByRole('button', { name: 'Add a gift' }).click();
+  await a.getByLabel('Store link').fill('http://127.0.0.1:9/p/knit-beanie/-/A-123');
+  // Scroll down to the photo section, then tap it: leaving the link starts the lookup.
+  const top = () => a.evaluate(() => document.getElementById('f-more-sum').getBoundingClientRect().top);
+  await a.evaluate(() => document.getElementById('f-more-sum').scrollIntoView({ block: 'center' }));
+  const before = await top();
+  await a.evaluate(() => document.getElementById('f-more-sum').focus({ preventScroll: true }));
+  await a.locator('#fa-box').waitFor();
+  await a.waitForTimeout(200);
+  const after = await top();
+  assert.ok(Math.abs(after - before) < 3, `the photo section stays put on screen (${before} then ${after})`);
+  assert.equal(await a.evaluate(() => document.activeElement.id), 'f-more-sum', 'and keeps focus');
+  await a.getByRole('button', { name: 'Cancel' }).click();
+  step('Moving on while a pasted link is looked up: the page does not jump, and focus stays put');
   step('A link that looks unsafe gets a warning under Store link, with the reasons; changing the link clears it');
 }
 

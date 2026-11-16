@@ -487,3 +487,11 @@ body:has(.wl-toast:not([hidden])) { padding-bottom: calc(var(--sdc-space-3xl) + 
 .wl-linkcheck__title { font-weight: 700; }
 .wl-linkcheck ul { margin: 0; padding-inline-start: var(--sdc-space-md); display: grid; gap: calc(var(--sdc-space-xs) / 2); }
 @media (forced-colors: active) { .wl-linkcheck--caution, .wl-linkcheck--danger { border: var(--sdc-control-border) solid CanvasText; } }
+
+/* The photo question under Store link uses .wl-confirm, the app's question-with-buttons pattern.
+   Once a photo is added, its thumbnail shows there. */
+.wl-photoask { position: relative; margin-top: 0; max-width: none; background: var(--sdc-bg);
+  border: var(--sdc-control-border) solid var(--sdc-rule); border-radius: var(--sdc-radius-sm); }
+.wl-photoask > p { margin: 0; }
+.wl-photoask__thumb { inline-size: var(--sdc-space-3xl); aspect-ratio: 1; object-fit: contain; border-radius: var(--sdc-radius-sm);
+  background: var(--sdc-paper-white); }
